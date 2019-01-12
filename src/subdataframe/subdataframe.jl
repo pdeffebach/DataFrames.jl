@@ -1,31 +1,20 @@
 """
-    SubDataFrame{<:AbstractVector{Int}} <: AbstractDataFrame
+    SubDataFrame{<:AbstractDataFrame,<:AbstractIndex,<:AbstractVector{Int}} <: AbstractDataFrame
 
-A view of row subsets of an AbstractDataFrame
+A view of an `AbstractDataFrame`. It is returned by a call to the `view` function
+on an `AbstractDataFrame` if a collections of rows and columns are specified.
 
-A `SubDataFrame` is meant to be constructed with `view`.  A
-SubDataFrame is used frequently in split/apply sorts of operations.
-
-```julia
-view(d::AbstractDataFrame, rows)
-```
-
-### Arguments
-
-* `d` : an AbstractDataFrame
-* `rows` : any indexing type for rows, typically an Int,
-  AbstractVector{Int}, AbstractVector{Bool}, or a Range
-
-### Notes
-
-A `SubDataFrame` is an AbstractDataFrame, so expect that most
+A `SubDataFrame` is an `AbstractDataFrame`, so expect that most
 DataFrame functions should work. Such methods include `describe`,
-`dump`, `nrow`, `size`, `by`, `stack`, and `join`. Indexing is just
-like a DataFrame; copies are returned.
+`dump`, `nrow`, `size`, `by`, `stack`, and `join`.
 
-To subset along columns, use standard column indexing as that creates
-a view to the columns by default. To subset along rows and columns,
-use column-based indexing with `view`.
+Indexing is just like a `DataFrame` except that it is possible to create a
+`SubDataFrame` with duplicate columns. All such columns will have a reference
+to the same entry in the parent `DataFrame`.
+
+If the selection of columns in a parent data frame is passed as `:` (a colon)
+then `SubDataFrame` will always have all columns from the parent,
+even if they are added or removed after its creation.
 
 ### Examples
 
@@ -33,133 +22,70 @@ use column-based indexing with `view`.
 df = DataFrame(a = repeat([1, 2, 3, 4], outer=[2]),
                b = repeat([2, 1], outer=[4]),
                c = randn(8))
-sdf1 = view(df, 1:6)
-sdf2 = view(df, df[:a] .> 1)
-sdf3 = view(df[[1,3]], df[:a] .> 1)  # row and column subsetting
-sdf4 = groupby(df, :a)[1]  # indexing a GroupedDataFrame returns a SubDataFrame
-sdf5 = view(sdf1, 1:3)
-sdf1[:,[:a,:b]]
+sdf1 = view(df, 2:3) # column subsetting
+sdf2 = @view df[end:-1:1, [1,3]]  # row and column subsetting
+sdf3 = groupby(df, :a)[1]  # indexing a GroupedDataFrame returns a SubDataFrame
 ```
-
 """
-struct SubDataFrame{T<:AbstractVector{Int}} <: AbstractDataFrame
-    parent::DataFrame
+struct SubDataFrame{D<:AbstractDataFrame,S<:AbstractIndex,T<:AbstractVector{Int}} <: AbstractDataFrame
+    parent::D
+    colindex::S
     rows::T # maps from subdf row indexes to parent row indexes
+end
 
-    function SubDataFrame{T}(parent::DataFrame, rows::T) where {T <: AbstractVector{Int}}
-        if length(rows) > 0
-            rmin, rmax = extrema(rows)
-            if rmin < 1 || rmax > size(parent, 1)
-                throw(BoundsError())
-            end
-        end
-        new(parent, rows)
+Base.@propagate_inbounds function SubDataFrame(parent::DataFrame, rows::AbstractVector{Int}, cols)
+    @boundscheck if !checkindex(Bool, axes(parent, 1), rows)
+        throw(BoundsError("attempt to access a data frame with $(nrow(parent)) " *
+                          "rows at indices $rows"))
     end
+    SubDataFrame(parent, SubIndex(index(parent), cols), rows)
 end
+Base.@propagate_inbounds SubDataFrame(parent::DataFrame, ::Colon, cols) =
+    SubDataFrame(parent, axes(parent, 1), cols)
+@inline SubDataFrame(parent::DataFrame, row::Integer, cols) =
+    throw(ArgumentError("invalid row index: $row of type $(typeof(row))"))
 
-function SubDataFrame(parent::DataFrame, rows::T) where {T <: AbstractVector{Int}}
-    return SubDataFrame{T}(parent, rows)
-end
-
-function SubDataFrame(parent::DataFrame, rows::Colon)
-    return SubDataFrame(parent, 1:nrow(parent))
-end
-
-function SubDataFrame(parent::DataFrame, row::Bool)
-    throw(ArgumentError("invalid row index: $row of type `Bool`"))
-end
-
-function SubDataFrame(parent::DataFrame, row::Integer)
-    Base.depwarn("Creation of `SubDataFrame` with an `Integer` `row` is deprecated. " *
-                 "Use `SubDataFrame(parent, [row])` instead.", :SubDataFrame)
-    return SubDataFrame(parent, [Int(row)])
-end
-
-function SubDataFrame(parent::DataFrame, rows::AbstractVector{<:Integer})
+Base.@propagate_inbounds function SubDataFrame(parent::DataFrame, rows::AbstractVector{<:Integer}, cols)
     if any(x -> x isa Bool, rows)
         throw(ArgumentError("invalid row index of type `Bool`"))
     end
-    return SubDataFrame(parent, convert(Vector{Int}, rows))
+    return SubDataFrame(parent, convert(Vector{Int}, rows), cols)
 end
 
-function SubDataFrame(parent::DataFrame, rows::AbstractVector{Bool})
+Base.@propagate_inbounds function SubDataFrame(parent::DataFrame, rows::AbstractVector{Bool}, cols)
     if length(rows) != nrow(parent)
         throw(ArgumentError("invalid length of `AbstractVector{Bool}` row index" *
                             " (got $(length(rows)), expected $(nrow(parent)))"))
     end
-    return SubDataFrame(parent, findall(rows))
+    return SubDataFrame(parent, findall(rows), cols)
 end
 
-function SubDataFrame(parent::DataFrame, rows::AbstractVector)
+Base.@propagate_inbounds function SubDataFrame(parent::DataFrame, rows::AbstractVector, cols)
     if !all(x -> (x isa Integer) && !(x isa Bool), rows)
         throw(ArgumentError("only `Integer` indices are accepted in `rows`"))
     end
-    return SubDataFrame(parent, convert(Vector{Int}, rows))
+    return SubDataFrame(parent, convert(Vector{Int}, rows), cols)
 end
 
-function SubDataFrame(sdf::SubDataFrame, rowinds)
-    return SubDataFrame(parent(sdf), rows(sdf)[rowinds])
-end
-
-SubDataFrame(sdf::SubDataFrame, rowinds::Colon) = sdf
-
-"""
-    parent(sdf::SubDataFrame)
-
-Return the parent data frame of `sdf`.
-"""
-Base.parent(sdf::SubDataFrame) = getfield(sdf, :parent)
+Base.@propagate_inbounds SubDataFrame(sdf::SubDataFrame, rowind, cols) =
+    SubDataFrame(parent(sdf), rows(sdf)[rowind], parentcols(index(sdf), cols))
+Base.@propagate_inbounds SubDataFrame(sdf::SubDataFrame, rowind, ::Colon) =
+    SubDataFrame(parent(sdf), rows(sdf)[rowind], parentcols(index(sdf), :))
+Base.@propagate_inbounds SubDataFrame(sdf::SubDataFrame, ::Colon, cols) =
+    SubDataFrame(parent(sdf), rows(sdf), parentcols(index(sdf), cols))
+@inline SubDataFrame(sdf::SubDataFrame, ::Colon, ::Colon) = sdf
 
 rows(sdf::SubDataFrame) = getfield(sdf, :rows)
+Base.parent(sdf::SubDataFrame) = getfield(sdf, :parent)
+Base.parentindices(sdf::SubDataFrame) = (rows(sdf), parentcols(index(sdf)))
 
-# TODO: implement
-# `@view df[col]` -> the vector contained in column `col` (this is equivalent to `df[col]`)
-# `@view df[cols]` -> a `SubDataFrame` with parent `df` if `cols` is a colon and `df[cols]` otherwise
-# `sdf[col]` -> a view of the vector contained in column `col` of `parent(sdf)` with `DataFrames.rows(sdf)` as a selector;
-# `sdf[cols]` -> a `SubDataFrame`, with parent `parent(sdf)` if `cols` is a colon and `parent(sdf)[cols]` otherwise;
-# after deprecation period
-
-function Base.view(adf::AbstractDataFrame, rowinds)
-    Base.depwarn("`view(adf, x)` will select all rows and columns `x` from `adf` in the future. " *
-                 "Use `view(adf, x, :)` to select rows `x` and all columns from `adf` instead.", :view)
-    return SubDataFrame(adf, rowinds)
-end
-
-function Base.view(adf::AbstractDataFrame, rowind::Integer, colind::ColumnIndex)
-    Base.depwarn("`view(adf, rowind, colind)` will create a 0-dimensional view into `adf[colind]` in the future." *
-                 " Use `view(adf, [rowind], [colind])` instead.", :view)
-    return SubDataFrame(adf[[colind]], [rowind])
-end
-
-function Base.view(adf::AbstractDataFrame, rowind::Integer, ::Colon)
-    Base.depwarn("`view(adf, rowind, :)` will create a `DataFrameRow` in the future." *
-                 " Use `view(adf, [rowind], :)` to create a `SubDataFrame`", :view)
-    return SubDataFrame(adf, [rowind])
-end
-
-function Base.view(adf::AbstractDataFrame, rowind::Integer, colinds)
-    Base.depwarn("`view(adf, rowind, colinds)` will create a `DataFrameRow` in the future." *
-                 " Use `view(adf, [rowind], colinds)` to create a `SubDataFrame`", :view)
-    return SubDataFrame(adf[colinds], [rowind])
-end
-
-function Base.view(adf::AbstractDataFrame, rowinds, colinds)
-    return SubDataFrame(adf[colinds], rowinds)
-end
-
-function Base.view(adf::AbstractDataFrame, rowinds, ::Colon)
-    return SubDataFrame(adf, rowinds)
-end
-
-function Base.view(adf::AbstractDataFrame, rowinds, colind::ColumnIndex)
-    Base.depwarn("`view(adf, rowinds, col::ColumnIndex)` will create `view(df[col], rowinds)` in the future." *
-                 " Use `view(adf, rowinds, [col])` instead.", :view)
-    return SubDataFrame(adf[[colind]], rowinds)
-end
-
-function Base.view(adf::AbstractDataFrame, rowinds, colind::Bool)
+Base.@propagate_inbounds Base.view(adf::AbstractDataFrame, colinds) = view(adf, :, colinds)
+Base.@propagate_inbounds Base.view(adf::AbstractDataFrame, rowinds, colind::ColumnIndex) =
+    view(adf[colind], rowinds)
+@inline Base.view(adf::AbstractDataFrame, rowinds, colind::Bool) =
     throw(ArgumentError("invalid column index $colind of type `Bool`"))
-end
+Base.@propagate_inbounds Base.view(adf::AbstractDataFrame, rowinds, colinds) =
+    SubDataFrame(adf, rowinds, colinds)
 
 ##############################################################################
 ##
@@ -167,45 +93,39 @@ end
 ##
 ##############################################################################
 
-index(sdf::SubDataFrame) = index(parent(sdf))
+index(sdf::SubDataFrame) = getfield(sdf, :colindex)
 
 # TODO: Remove these
 nrow(sdf::SubDataFrame) = ncol(sdf) > 0 ? length(rows(sdf))::Int : 0
 ncol(sdf::SubDataFrame) = length(index(sdf))
 
-function Base.getindex(sdf::SubDataFrame, colind::ColumnIndex)
-    Base.depwarn("`sdf[colind]` will create a view of `parent(sdf)[colind]` in the future." *
-                 " Use sdf[:, colind]` to get a freshly allocated vector.", :getindex)
-    return parent(sdf)[rows(sdf), colind]
-end
+Base.@propagate_inbounds Base.getindex(sdf::SubDataFrame, colind::ColumnIndex) =
+    view(parent(sdf), rows(sdf), parentcols(index(sdf), colind))
+Base.@propagate_inbounds Base.getindex(sdf::SubDataFrame, colinds::AbstractVector) =
+    SubDataFrame(parent(sdf), rows(sdf), parentcols(index(sdf), colinds))
+@inline Base.getindex(sdf::SubDataFrame, ::Colon) = sdf
+Base.@propagate_inbounds Base.getindex(sdf::SubDataFrame, rowind::Integer, colind::ColumnIndex) =
+    parent(sdf)[rows(sdf)[rowind], parentcols(index(sdf), colind)]
+Base.@propagate_inbounds Base.getindex(sdf::SubDataFrame, rowinds::AbstractVector, colind::ColumnIndex) =
+    parent(sdf)[rows(sdf)[rowinds], parentcols(index(sdf), colind)]
+Base.@propagate_inbounds Base.getindex(sdf::SubDataFrame, ::Colon, colind::ColumnIndex) =
+    parent(sdf)[rows(sdf), parentcols(index(sdf), colind)]
+Base.@propagate_inbounds Base.getindex(sdf::SubDataFrame, ::Colon, colinds::AbstractVector) =
+    parent(sdf)[rows(sdf), parentcols(index(sdf), colinds)]
+Base.@propagate_inbounds Base.getindex(sdf::SubDataFrame, rowinds::AbstractVector, colinds::AbstractVector) =
+    parent(sdf)[rows(sdf)[rowinds], parentcols(index(sdf), colinds)]
+Base.@propagate_inbounds Base.getindex(sdf::SubDataFrame, rowinds::AbstractVector, ::Colon) =
+    parent(sdf)[rows(sdf)[rowinds], parentcols(index(sdf), :)]
+Base.@propagate_inbounds Base.getindex(sdf::SubDataFrame, ::Colon, ::Colon) =
+    parent(sdf)[rows(sdf), parentcols(index(sdf), :)]
 
-function Base.getindex(sdf::SubDataFrame, colinds)
-    Base.depwarn("`sdf[colinds]` will create a `SubDataFrame` in the future." *
-                 " Use `sdf[:, colinds]` to get a `DataFrame`.", :getindex)
-    return parent(sdf)[rows(sdf), colinds]
-end
-
-function Base.getindex(sdf::SubDataFrame, rowind::Integer, colind::ColumnIndex)
-    return parent(sdf)[rows(sdf)[rowind], colind]
-end
-
-function Base.getindex(sdf::SubDataFrame, rowind::Integer, colinds)
-    Base.depwarn("Selecting a single row from a `SubDataFrame` will return a `DataFrameRow` in the future. " *
-                 "Use `sdf[rowind:rowind, colinds]` to get a `DataFrame`.", :getindex)
-    return parent(sdf)[rows(sdf)[rowind], colinds]
-end
-
-function Base.getindex(sdf::SubDataFrame, rowinds, colinds)
-    return parent(sdf)[rows(sdf)[rowinds], colinds]
-end
-
-function Base.setindex!(sdf::SubDataFrame, val::Any, colinds::Any)
-    parent(sdf)[rows(sdf), colinds] = val
+Base.@propagate_inbounds function Base.setindex!(sdf::SubDataFrame, val::Any, colinds::Any)
+    parent(sdf)[rows(sdf), parentcols(index(sdf), colinds)] = val
     return sdf
 end
 
-function Base.setindex!(sdf::SubDataFrame, val::Any, rowinds::Any, colinds::Any)
-    parent(sdf)[rows(sdf)[rowinds], colinds] = val
+Base.@propagate_inbounds function Base.setindex!(sdf::SubDataFrame, val::Any, rowinds::Any, colinds::Any)
+    parent(sdf)[rows(sdf)[rowinds], parentcols(index(sdf), colinds)] = val
     return sdf
 end
 
@@ -215,8 +135,11 @@ end
 ##
 ##############################################################################
 
-Base.copy(sdf::SubDataFrame) = parent(sdf)[rows(sdf), :]
+Base.copy(sdf::SubDataFrame) = parent(sdf)[rows(sdf), parentcols(index(sdf), :)]
 
-without(sdf::SubDataFrame, c) = view(without(parent(sdf), c), rows(sdf), :)
-# Resolve a method ambiguity
-without(sdf::SubDataFrame, c::Vector{<:Integer}) = view(without(parent(sdf), c), rows(sdf), :)
+function without(df::SubDataFrame, icols::Vector{<:Integer})
+    newcols = setdiff(1:ncol(df), icols)
+    view(df, newcols)
+end
+deleterows!(df::SubDataFrame, ind) =
+    throw(ArgumentError("SubDataFrame does not support deleting rows"))

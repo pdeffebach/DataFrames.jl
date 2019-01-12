@@ -32,6 +32,8 @@ The following are normally implemented for AbstractDataFrames:
 * [`nonunique`](@ref) : indexes of duplicate rows
 * [`unique!`](@ref) : remove duplicate rows
 * `similar` : a DataFrame with similar columns as `d`
+* `filter` : remove rows
+* `filter!` : remove rows in-place
 
 **Indexing**
 
@@ -217,9 +219,10 @@ end
 
 Base.lastindex(df::AbstractDataFrame) = ncol(df)
 Base.lastindex(df::AbstractDataFrame, i::Integer) = last(axes(df, i))
-Base.axes(df::AbstractDataFrame, i::Integer) = axes(df)[i]
+Base.axes(df::AbstractDataFrame, i::Integer) = Base.OneTo(size(df, i))
 
 Base.ndims(::AbstractDataFrame) = 2
+Base.ndims(::Type{<:AbstractDataFrame}) = 2
 
 Base.getproperty(df::AbstractDataFrame, col_ind::Symbol) = getindex(df, col_ind)
 Base.setproperty!(df::AbstractDataFrame, col_ind::Symbol, x) = setindex!(df, x, col_ind)
@@ -317,43 +320,14 @@ Get a data frame with the `n` last rows of `df`.
 Base.last(df::AbstractDataFrame, n::Integer) = df[max(1,nrow(df)-n+1):nrow(df), :]
 
 # get the structure of a df
-"""
-Show the structure of an AbstractDataFrame, in a tree-like format
-
-```julia
-dump(df::AbstractDataFrame, n::Int = 5)
-dump(io::IO, df::AbstractDataFrame, n::Int = 5)
-```
-
-**Arguments**
-
-* `df` : the AbstractDataFrame
-* `n` : the number of levels to show
-* `io` : optional output descriptor
-
-**Result**
-
-* nothing
-
-**Examples**
-
-```julia
-df = DataFrame(i = 1:10, x = rand(10), y = rand(["a", "b", "c"], 10))
-dump(df)
-```
-
-"""
-function Base.dump(io::IO, df::AbstractDataFrame, n::Int, indent)
+function Base.dump(io::IOContext, df::AbstractDataFrame, n::Int, indent)
     println(io, typeof(df), "  $(nrow(df)) observations of $(ncol(df)) variables")
     if n > 0
-        for (name, col) in eachcol(df)
-            print(io, indent, "  ", name, ": ")
-            dump(io, col, n - 1, string(indent, "  "))
+        for (name, col) in eachcol(df, true)
+            println(io, indent, "  ", name, ": ", col)
         end
     end
 end
-Base.dump(io::IOContext, df::AbstractDataFrame, n::Int, indent) =
-    invoke(dump, Tuple{IO, AbstractDataFrame, Int, Any}, io, df, n, indent)
 
 
 """
@@ -426,13 +400,33 @@ function StatsBase.describe(df::AbstractDataFrame; stats::Union{Symbol,AbstractV
         throw(ArgumentError(not_allowed * allowed_msg))
     end
 
-
     # Put the summary stats into the return data frame
     data = DataFrame()
     data[:variable] = names(df)
 
     # An array of Dicts for summary statistics
-    column_stats_dicts = [get_stats(col) for col in columns(df)]
+    column_stats_dicts = map(columns(df)) do col
+        if eltype(col) >: Missing
+            d = get_stats(collect(skipmissing(col)), stats)
+        else
+            d = get_stats(col, stats)
+        end
+
+        if :nmissing in stats
+            d[:nmissing] = eltype(col) >: Missing ? count(ismissing, col) : nothing
+        end
+
+        if :first in stats
+            d[:first] = isempty(col) ? nothing : first(col)
+        end
+
+        if :last in stats
+            d[:last] = isempty(col) ? nothing : last(col)
+        end
+
+        return d
+    end
+
     for stat in stats
         # for each statistic, loop through the columns array to find values
         # letting the comprehension choose the appropriate type
@@ -441,62 +435,49 @@ function StatsBase.describe(df::AbstractDataFrame; stats::Union{Symbol,AbstractV
     return data
 end
 
-# Define functions for getting summary statistics
+# Compute summary statistics
 # use a dict because we dont know which measures the user wants
 # Outside of the `describe` function due to something with 0.7
+function get_stats(col::AbstractVector, stats::AbstractVector{Symbol})
+    d = Dict{Symbol, Any}()
 
-function get_stats(col::AbstractArray{>:Missing})
-    nomissing = collect(skipmissing(col))
-
-    q = try quantile(nomissing, [.25, .5, .75]) catch; [nothing, nothing, nothing] end
-    ex = try extrema(nomissing) catch; (nothing, nothing) end
-    m = try mean(nomissing) catch end
-    if eltype(nomissing) <: Real
-        u = nothing
-    else
-        u = try length(unique(nomissing)) catch end
+    if :q25 in stats || :median in stats || :q75 in stats
+        q = try quantile(col, [.25, .5, .75]) catch; (nothing, nothing, nothing) end
+        d[:q25] = q[1]
+        d[:median] = q[2]
+        d[:q75] = q[3]
     end
 
-    Dict(
-        :mean => m,
-        :std => try std(nomissing, mean = m) catch end,
-        :min => ex[1],
-        :q25 => q[1],
-        :median => q[2],
-        :q75 => q[3],
-        :max => ex[2],
-        :nmissing => count(ismissing, col),
-        :nunique => u,
-        :first => isempty(col) ? nothing : first(col),
-        :last => isempty(col) ? nothing : last(col),
-        :eltype => Missings.T(eltype(col))
-    )
-end
-
-function get_stats(col)
-    q = try quantile(col, [.25, .5, .75]) catch; [nothing, nothing, nothing] end
-    ex = try extrema(col) catch; (nothing, nothing) end
-    m = try mean(col) catch end
-    if eltype(col) <: Real
-        u = nothing
-    else
-        u = try length(unique(col)) catch end
+    if :min in stats || :max in stats
+        ex = try extrema(col) catch; (nothing, nothing) end
+        d[:min] = ex[1]
+        d[:max] = ex[2]
     end
 
-    Dict(
-        :mean => m,
-        :std => try std(col, mean = m) catch end,
-        :min => ex[1],
-        :q25 => q[1],
-        :median => q[2],
-        :q75 => q[3],
-        :max => ex[2],
-        :nmissing => nothing,
-        :nunique => u,
-        :first => isempty(col) ? nothing : first(col),
-        :last => isempty(col) ? nothing : last(col),
-        :eltype => eltype(col)
-    )
+    if :mean in stats || :std in stats
+        m = try mean(col) catch end
+        # we can add non-necessary things to d, because we choose what we need
+        # in the main function
+        d[:mean] = m
+    end
+
+    if :std in stats
+        d[:std] = try std(col, mean = m) catch end
+    end
+
+    if :nunique in stats
+        if eltype(col) <: Real
+            d[:nunique] = nothing
+        else
+            d[:nunique] = try length(unique(col)) catch end
+        end
+    end
+
+    if :eltype in stats
+        d[:eltype] = eltype(col)
+    end
+
+    return d
 end
 
 
@@ -592,13 +573,16 @@ end
 completecases(df::AbstractDataFrame, cols::AbstractVector) =
     completecases(df[cols])
 
+# TODO: update docstrings after deprecation of disallowmissing
 """
-    dropmissing(df::AbstractDataFrame)
-    dropmissing(df::AbstractDataFrame, cols::AbstractVector)
-    dropmissing(df::AbstractDataFrame, cols::Union{Integer, Symbol})
+    dropmissing(df::AbstractDataFrame; disallowmissing::Bool=false)
+    dropmissing(df::AbstractDataFrame, cols::AbstractVector; disallowmissing::Bool=false)
+    dropmissing(df::AbstractDataFrame, cols::Union{Integer, Symbol}; disallowmissing::Bool=false)
 
 Return a copy of data frame `df` excluding rows with missing values.
 If `cols` is provided, only missing values in the corresponding columns are considered.
+
+In the future `disallowmissing` will be `true` by default.
 
 See also: [`completecases`](@ref) and [`dropmissing!`](@ref).
 
@@ -626,6 +610,14 @@ julia> dropmissing(df)
 │ 1   │ 4     │ 2      │ d       │
 │ 2   │ 5     │ 1      │ e       │
 
+julia> dropmissing(df, disallowmissing=true)
+2×3 DataFrame
+│ Row │ i     │ x     │ y      │
+│     │ Int64 │ Int64 │ String │
+├─────┼───────┼───────┼────────┤
+│ 1   │ 4     │ 2     │ d      │
+│ 2   │ 5     │ 1     │ e      │
+
 julia> dropmissing(df, :x)
 3×3 DataFrame
 │ Row │ i     │ x      │ y       │
@@ -645,17 +637,28 @@ julia> dropmissing(df, [:x, :y])
 ```
 
 """
-dropmissing(df::AbstractDataFrame,
-            cols::Union{Integer, Symbol, AbstractVector}=1:size(df, 2)) =
-    deleterows!(copy(df), findall(!, completecases(df, cols)))
+function dropmissing(df::AbstractDataFrame,
+                     cols::Union{Integer, Symbol, AbstractVector}=1:size(df, 2);
+                     disallowmissing::Bool=false)
+    newdf = df[completecases(df, cols), :]
+    if disallowmissing
+        disallowmissing!(newdf, cols)
+    else
+        Base.depwarn("dropmissing will change eltype of cols to disallow missing by default. " *
+                     "Use dropmissing(df, cols, disallowmissing=false) to allow for missing values.", :dropmissing)
+    end
+    newdf
+end
 
 """
-    dropmissing!(df::AbstractDataFrame)
-    dropmissing!(df::AbstractDataFrame, cols::AbstractVector)
-    dropmissing!(df::AbstractDataFrame, cols::Union{Integer, Symbol})
+    dropmissing!(df::AbstractDataFrame; disallowmissing::Bool=false)
+    dropmissing!(df::AbstractDataFrame, cols::AbstractVector; disallowmissing::Bool=false)
+    dropmissing!(df::AbstractDataFrame, cols::Union{Integer, Symbol}; disallowmissing::Bool=false)
 
 Remove rows with missing values from data frame `df` and return it.
 If `cols` is provided, only missing values in the corresponding columns are considered.
+
+In the future `disallowmissing` will be `true` by default.
 
 See also: [`dropmissing`](@ref) and [`completecases`](@ref).
 
@@ -687,6 +690,15 @@ julia> df1
 │ 1   │ 4     │ 2      │ d       │
 │ 2   │ 5     │ 1      │ e       │
 
+julia> dropmissing!(df1, disallowmissing=true);
+ julia> df1
+2×3 DataFrame
+│ Row │ i     │ x     │ y      │
+│     │ Int64 │ Int64 │ String │
+├─────┼───────┼───────┼────────┤
+│ 1   │ 4     │ 2     │ d      │
+│ 2   │ 5     │ 1     │ e      │
+
 julia> df2 = copy(df);
 
 julia> dropmissing!(df2, :x);
@@ -715,9 +727,18 @@ julia> df3
 ```
 
 """
-dropmissing!(df::AbstractDataFrame,
-             cols::Union{Integer, Symbol, AbstractVector}=1:size(df, 2)) =
-    deleterows!(df, findall(!, completecases(df, cols)))
+function dropmissing!(df::AbstractDataFrame,
+                      cols::Union{Integer, Symbol, AbstractVector}=1:size(df, 2);
+                      disallowmissing::Bool=false)
+    deleterows!(df, (!).(completecases(df, cols)))
+    if disallowmissing
+        disallowmissing!(df, cols)
+    else
+        Base.depwarn("dropmissing! will change eltype of cols to disallow missing by default. " *
+                     "Use dropmissing!(df, cols, disallowmissing=false) to retain missing.", :dropmissing!)
+    end
+    df
+end
 
 """
     filter(function, df::AbstractDataFrame)
@@ -780,14 +801,8 @@ julia> df
 Base.filter!(f, df::AbstractDataFrame) =
     deleterows!(df, findall(collect(!f(r)::Bool for r in eachrow(df))))
 
-function Base.convert(::Type{Array}, df::AbstractDataFrame)
-    convert(Matrix, df)
-end
 function Base.convert(::Type{Matrix}, df::AbstractDataFrame)
     T = reduce(promote_type, eltypes(df))
-    convert(Matrix{T}, df)
-end
-function Base.convert(::Type{Array{T}}, df::AbstractDataFrame) where T
     convert(Matrix{T}, df)
 end
 function Base.convert(::Type{Matrix{T}}, df::AbstractDataFrame) where T
@@ -853,19 +868,21 @@ function nonunique(df::AbstractDataFrame)
     return res
 end
 
-nonunique(df::AbstractDataFrame, cols::Union{Real, Symbol}) = nonunique(df[[cols]])
+nonunique(df::AbstractDataFrame, cols::Union{Integer, Symbol}) = nonunique(df[[cols]])
 nonunique(df::AbstractDataFrame, cols::Any) = nonunique(df[cols])
 
-if isdefined(Base, :unique!)
-    import Base.unique!
-end
-
-unique!(df::AbstractDataFrame) = deleterows!(df, findall(nonunique(df)))
-unique!(df::AbstractDataFrame, cols::Any) = deleterows!(df, findall(nonunique(df, cols)))
+Base.unique!(df::AbstractDataFrame) = deleterows!(df, findall(nonunique(df)))
+Base.unique!(df::AbstractDataFrame, cols::AbstractVector) =
+    deleterows!(df, findall(nonunique(df, cols)))
+Base.unique!(df::AbstractDataFrame, cols::Union{Integer, Symbol, Colon}) =
+    deleterows!(df, findall(nonunique(df, cols)))
 
 # Unique rows of an AbstractDataFrame.
 Base.unique(df::AbstractDataFrame) = df[(!).(nonunique(df)), :]
-Base.unique(df::AbstractDataFrame, cols::Any) = df[(!).(nonunique(df, cols)), :]
+Base.unique(df::AbstractDataFrame, cols::AbstractVector) =
+    df[(!).(nonunique(df, cols)), :]
+Base.unique(df::AbstractDataFrame, cols::Union{Integer, Symbol, Colon}) =
+    df[(!).(nonunique(df, cols)), :]
 
 """
 Delete duplicate rows
@@ -937,26 +954,6 @@ Base.hcat(df::AbstractDataFrame, x, y...; makeunique::Bool=false) =
 Base.hcat(df1::AbstractDataFrame, df2::AbstractDataFrame, dfn::AbstractDataFrame...;
           makeunique::Bool=false) =
     hcat!(hcat(df1, df2, makeunique=makeunique), dfn..., makeunique=makeunique)
-
-@generated function promote_col_type(cols::AbstractVector...)
-    T = mapreduce(x -> Missings.T(eltype(x)), promote_type, cols)
-    if CategoricalArrays.iscatvalue(T)
-        T = CategoricalArrays.leveltype(T)
-    end
-    if any(col -> eltype(col) >: Missing, cols)
-        if any(col -> col <: AbstractCategoricalArray, cols)
-            return :(CategoricalVector{Union{$T, Missing}})
-        else
-            return :(Vector{Union{$T, Missing}})
-        end
-    else
-        if any(col -> col <: AbstractCategoricalArray, cols)
-            return :(CategoricalVector{$T})
-        else
-            return :(Vector{$T})
-        end
-    end
-end
 
 """
     vcat(dfs::AbstractDataFrame...)
@@ -1040,6 +1037,7 @@ function _vcat(dfs::AbstractVector{<:AbstractDataFrame};
     length(header) == 0 && return DataFrame()
     cols = Vector{AbstractVector}(undef, length(header))
     for (i, name) in enumerate(header)
+<<<<<<< HEAD
         # TODO: replace with commented out code after getindex deprecation
         # data = [df[name] for df in dfs]
         # the code below assumes that only DataFrame and SubDataFrame
@@ -1064,6 +1062,9 @@ function _vcat(dfs::AbstractVector{<:AbstractDataFrame};
             end
         end
 
+=======
+        data = [df[name] for df in dfs]
+>>>>>>> master
         lens = map(length, data)
         T = mapreduce(eltype, promote_type, data)
         cols[i] = Tables.allocatecolumn(T, sum(lens))
@@ -1168,6 +1169,8 @@ function Base.hash(df::AbstractDataFrame, h::UInt)
     return h
 end
 
+Base.parent(adf::AbstractDataFrame) = adf
+Base.parentindices(adf::AbstractDataFrame) = axes(adf)
 
 ## Documentation for methods defined elsewhere
 

@@ -93,23 +93,14 @@ module TestGrouping
 
         cols = [:a, :b]
 
-        f1(df) = DataFrame(cmax = maximum(df[:, :c]))
-        f2(df) = (cmax = maximum(df[:, :c]),)
-        f3(df) = maximum(df[:, :c])
-        f4(df) = [maximum(df[:, :c]), minimum(df[:, :c])]
-        f5(df) = reshape([maximum(df[:, :c]), minimum(df[:, :c])], 2, 1)
-        f6(df) = [maximum(df[:, :c]) minimum(df[:, :c])]
-        f7(df) = (c2 = df[:, :c].^2,)
-        f8(df) = DataFrame(c2 = df[:, :c].^2)
-        #TODO: enable lines below after getindex deprecation
-        # f1(df) = DataFrame(cmax = maximum(df[:c]))
-        # f2(df) = (cmax = maximum(df[:c]),)
-        # f3(df) = maximum(df[:c])
-        # f4(df) = [maximum(df[:c]), minimum(df[:c])]
-        # f5(df) = reshape([maximum(df[:c]), minimum(df[:c])], 2, 1)
-        # f6(df) = [maximum(df[:c]) minimum(df[:c])]
-        # f7(df) = (c2 = df[:c].^2,)
-        # f8(df) = DataFrame(c2 = df[:c].^2)
+        f1(df) = DataFrame(cmax = maximum(df[:c]))
+        f2(df) = (cmax = maximum(df[:c]),)
+        f3(df) = maximum(df[:c])
+        f4(df) = [maximum(df[:c]), minimum(df[:c])]
+        f5(df) = reshape([maximum(df[:c]), minimum(df[:c])], 2, 1)
+        f6(df) = [maximum(df[:c]) minimum(df[:c])]
+        f7(df) = (c2 = df[:c].^2,)
+        f8(df) = DataFrame(c2 = df[:c].^2)
 
         res = unique(df[cols])
         res.cmax = [maximum(df[(df.a .== a) .& (df.b .== b), :c])
@@ -133,7 +124,7 @@ module TestGrouping
         # by() without groups sorting
         @test sort(by(df, cols, identity)) ==
             sort(hcat(df, df[cols], makeunique=true))[[:a, :b, :a_1, :b_1, :c]]
-        @test sort(by(df, cols, df -> DataFrameRow(df, 1))[[:a, :b, :c]]) ==
+        @test sort(by(df, cols, df -> DataFrameRow(df, 1, :))[[:a, :b, :c]]) ==
             sort(df[.!nonunique(df, cols), :])
         @test by(df, cols, f1) == res
         @test by(df, cols, f2) == res
@@ -147,7 +138,7 @@ module TestGrouping
         # by() with groups sorting
         @test by(df, cols, identity, sort=true) ==
             sort(hcat(df, df[cols], makeunique=true), cols)[[:a, :b, :a_1, :b_1, :c]]
-        @test by(df, cols, df -> DataFrameRow(df, 1), sort=true)[[:a, :b, :c]] ==
+        @test by(df, cols, df -> DataFrameRow(df, 1, :), sort=true)[[:a, :b, :c]] ==
             sort(df[.!nonunique(df, cols), :])
         @test by(df, cols, f1, sort=true) == sres
         @test by(df, cols, f2, sort=true) == sres
@@ -302,7 +293,7 @@ module TestGrouping
         df = DataFrame(x = [1, 2, 3], y = [2, 3, 1])
 
         # Test function returning DataFrameRow
-        res = by(d -> DataFrameRow(d, 1), df, :x)
+        res = by(d -> DataFrameRow(d, 1, :), df, :x)
         @test res == DataFrame(x=df.x, x_1=df.x, y=df.y)
 
         # Test function returning Tuple

@@ -5,9 +5,9 @@ module TestIteration
     df = DataFrame(A = Vector{Union{Int, Missing}}(1:2), B = Vector{Union{Int, Missing}}(2:3))
 
     @test size(eachrow(df)) == (size(df, 1),)
-    @test eachrow(df)[1] == DataFrameRow(df, 1)
-    @test collect(eachrow(df)) isa Vector{DataFrameRow{DataFrame}}
-    @test eltype(eachrow(df)) == DataFrameRow{DataFrame}
+    @test eachrow(df)[1] == DataFrameRow(df, 1, :)
+    @test collect(eachrow(df)) isa Vector{<:DataFrameRow}
+    @test eltype(eachrow(df)) <: DataFrameRow
     for row in eachrow(df)
         @test isa(row, DataFrameRow)
         @test (row[:B] - row[:A]) == 1
@@ -15,7 +15,7 @@ module TestIteration
         @test collect(pairs(row)) isa Vector{Pair{Symbol, Int}}
     end
 
-    # TODO - clean up redundant tests after deprecation
+    # TODO - clean up redundant tests after eachcol deprecation
     @test size(eachcol(df)) == (size(df, 2),)
     @test size(eachcol(df, true)) == (size(df, 2),)
     @test size(columns(df)) == (size(df, 2),)
@@ -24,8 +24,8 @@ module TestIteration
     @test length(eachcol(df, true)) == size(df, 2)
     @test length(columns(df)) == size(df, 2)
     @test length(eachcol(df, false)) == size(df, 2)
-    @test eachcol(df)[1] == df[1] # this will be (:A => df[1]) after deprecation
-    @test eachcol(df, true)[1] == df[1] # this will be (:A => df[1]) after deprecation
+    @test eachcol(df)[1] == (:A => df[1]) # this will be df[1] after eachcol deprecation
+    @test eachcol(df, true)[1] == (:A => df[1])
     @test columns(df)[1] == df[1]
     @test eachcol(df, false)[1] == df[1]
     @test collect(eachcol(df)) isa Vector{Pair{Symbol, AbstractVector}}
@@ -76,7 +76,7 @@ module TestIteration
     @test mapcols(x -> x[1] == 1 ? x : 0, df_mapcols) == DataFrame(a=1:10, b=0)
     @test_throws ArgumentError mapcols(x -> x[1] != 1 ? x : 0, df_mapcols)
 
-    row = DataFrameRow(df, 1)
+    row = DataFrameRow(df, 1, :)
 
     row[:A] = 100
     @test df[1, :A] == 100
@@ -96,5 +96,32 @@ module TestIteration
     @test df[3, :B] == "M"
     @test view(s2, 1:1:2, :) == view(df, [1,3], :)
 
-    # @test_fail for x in df; end # Raises an error
+    @test_throws MethodError for x in df; end
+
+    @testset "SubDataFrame" begin
+        df = DataFrame([11:16 21:26 31:36 41:46])
+        sdf = view(df, [3,1,4], [3,1,4])
+        @test sdf == df[[3,1,4], [3,1,4]]
+        @test eachrow(sdf) == eachrow(df[[3,1,4], [3,1,4]])
+        @test eachcol(sdf, true) == eachcol(df[[3,1,4], [3,1,4]], true)
+        @test eachcol(sdf, false) == eachcol(df[[3,1,4], [3,1,4]], false)
+        @test size(eachrow(sdf)) == (3,)
+        @test size(eachcol(sdf, true)) == (3,)
+        @test size(eachcol(sdf, false)) == (3,)
+    end
+
+    @testset "parent mutation" begin
+        df = DataFrame([11:16 21:26 31:36 41:46])
+        sdf = view(df, [3,1,4], [3,1,4])
+        erd = eachrow(df)
+        erv = eachrow(sdf)
+        names!(df, Symbol.(string.("y", 1:4)))
+        df[1] = 51:56
+        @test df[1, :] == erd[1]
+        @test copy(erv[1]) == (y3=33, y1=53, y4=43)
+        df.z = 1
+        @test length(erd[1]) == 5 # the added column is reflected
+        deletecols!(df, [4,5])
+        @test copy(erd[1]) == (y1 = 51, y2 = 21, y3 = 31) # the removed columns are reflected
+    end
 end

@@ -81,9 +81,15 @@ module TestDataFrame
         df = DataFrame(a=[1, 2], b=[3.0, 4.0])
         @test haskey(df, :a)
         @test !haskey(df, :c)
+        @test haskey(df, 1)
+        @test_throws MethodError haskey(df, 1.5)
+        @test_throws ArgumentError haskey(df, true)
         @test get(df, :a, -1) === columns(df)[1]
         @test get(df, :c, -1) == -1
         @test !isempty(df)
+
+        dfv = view(df, 1:2, 1:2)
+        @test get(df, :a, -1) === columns(df)[1]
 
         @test empty!(df) === df
         @test isempty(columns(df))
@@ -140,13 +146,12 @@ module TestDataFrame
         @test all(ismissing, df[1])
         @test all(ismissing, df[2])
         @test all(ismissing, df[3])
-        # TODO: enable those tests after getindex deprecation period
-        # @test typeof(df[:, 1]) == Vector{Union{Int, Missing}}
-        # @test typeof(df[:, 2]) == Vector{Union{Int, Missing}}
-        # @test typeof(df[:, 3]) == Vector{Union{Int, Missing}}
-        # @test all(ismissing, df[:, 1])
-        # @test all(ismissing, df[:, 2])
-        # @test all(ismissing, df[:, 3])
+        @test typeof(df[:, 1]) == Vector{Union{Int, Missing}}
+        @test typeof(df[:, 2]) == Vector{Union{Int, Missing}}
+        @test typeof(df[:, 3]) == Vector{Union{Int, Missing}}
+        @test all(ismissing, df[:, 1])
+        @test all(ismissing, df[:, 2])
+        @test all(ismissing, df[:, 3])
 
         df = DataFrame([Union{Int, Missing}, Union{Float64, Missing}, Union{String, Missing}], 100)
         @test size(df, 1) == 100
@@ -157,13 +162,12 @@ module TestDataFrame
         @test all(ismissing, df[1])
         @test all(ismissing, df[2])
         @test all(ismissing, df[3])
-        # TODO: enable those tests after getindex deprecation period
-        # @test typeof(df[:, 1]) == Vector{Union{Int, Missing}}
-        # @test typeof(df[:, 2]) == Vector{Union{Float64, Missing}}
-        # @test typeof(df[:, 3]) == Vector{Union{String, Missing}}
-        # @test all(ismissing, df[:, 1])
-        # @test all(ismissing, df[:, 2])
-        # @test all(ismissing, df[:, 3])
+        @test typeof(df[:, 1]) == Vector{Union{Int, Missing}}
+        @test typeof(df[:, 2]) == Vector{Union{Float64, Missing}}
+        @test typeof(df[:, 3]) == Vector{Union{String, Missing}}
+        @test all(ismissing, df[:, 1])
+        @test all(ismissing, df[:, 2])
+        @test all(ismissing, df[:, 3])
 
         df = DataFrame([Union{Int, Missing}, Union{Float64, Missing}, Union{String, Missing}],
                     [:A, :B, :C], 100)
@@ -175,13 +179,12 @@ module TestDataFrame
         @test all(ismissing, df[1])
         @test all(ismissing, df[2])
         @test all(ismissing, df[3])
-        # TODO: enable those tests after getindex deprecation period
-        # @test typeof(df[:, 1]) == Vector{Union{Int, Missing}}
-        # @test typeof(df[:, 2]) == Vector{Union{Float64, Missing}}
-        # @test typeof(df[:, 3]) == Vector{Union{String, Missing}}
-        # @test all(ismissing, df[:, 1])
-        # @test all(ismissing, df[:, 2])
-        # @test all(ismissing, df[:, 3])
+        @test typeof(df[:, 1]) == Vector{Union{Int, Missing}}
+        @test typeof(df[:, 2]) == Vector{Union{Float64, Missing}}
+        @test typeof(df[:, 3]) == Vector{Union{String, Missing}}
+        @test all(ismissing, df[:, 1])
+        @test all(ismissing, df[:, 2])
+        @test all(ismissing, df[:, 3])
 
         df = DataFrame([Union{Int, Missing}, Union{Float64, Missing}, Union{String, Missing}],
                     [:A, :B, :C], [false, false, true], 100)
@@ -193,34 +196,30 @@ module TestDataFrame
         @test all(ismissing, df[1])
         @test all(ismissing, df[2])
         @test all(ismissing, df[3])
-        # TODO: enable those tests after getindex deprecation period
-        # @test typeof(df[:, 1]) == Vector{Union{Int, Missing}}
-        # @test typeof(df[:, 2]) == Vector{Union{Float64, Missing}}
-        # @test typeof(df[:, 3]) <: CategoricalVector{Union{String, Missing}}
-        # @test all(ismissing, df[:, 1])
-        # @test all(ismissing, df[:, 2])
-        # @test all(ismissing, df[:, 3])
+        @test typeof(df[:, 1]) == Vector{Union{Int, Missing}}
+        @test typeof(df[:, 2]) == Vector{Union{Float64, Missing}}
+        @test typeof(df[:, 3]) <: CategoricalVector{Union{String, Missing}}
+        @test all(ismissing, df[:, 1])
+        @test all(ismissing, df[:, 2])
+        @test all(ismissing, df[:, 3])
 
         df = convert(DataFrame, zeros(10, 5))
         @test size(df, 1) == 10
         @test size(df, 2) == 5
         @test typeof(df[1]) == Vector{Float64}
-        # TODO: enable those tests after getindex deprecation period
-        # @test typeof(df[:, 1]) == Vector{Float64}
+        @test typeof(df[:, 1]) == Vector{Float64}
 
         df = convert(DataFrame, ones(10, 5))
         @test size(df, 1) == 10
         @test size(df, 2) == 5
         @test typeof(df[1]) == Vector{Float64}
-        # TODO: enable those tests after getindex deprecation period
-        # @test typeof(df[:, 1]) == Vector{Float64}
+        @test typeof(df[:, 1]) == Vector{Float64}
 
         df = convert(DataFrame, Matrix{Float64}(undef, 10, 5))
         @test size(df, 1) == 10
         @test size(df, 2) == 5
         @test typeof(df[1]) == Vector{Float64}
-        # TODO: enable those tests after getindex deprecation period
-        # @test typeof(df[:, 1]) == Vector{Float64}
+        @test typeof(df[:, 1]) == Vector{Float64}
 
         @test DataFrame([Union{Int, Missing}[1, 2, 3], Union{Float64, Missing}[2.5, 4.5, 6.5]],
                         [:A, :B]) ==
@@ -333,6 +332,7 @@ module TestDataFrame
         df = DataFrame(a=1, b=2, c=3, d=4, e=5)
         @test_throws ArgumentError deletecols!(df, 0)
         @test_throws ArgumentError deletecols!(df, 6)
+        @test_throws ArgumentError deletecols!(df, [1, 1])
         @test_throws KeyError deletecols!(df, :f)
 
         d = copy(df)
@@ -346,6 +346,10 @@ module TestDataFrame
         @test names(d) == [:a, :d]
         deletecols!(d, 2)
         @test d == DataFrame(a=1)
+
+        d = copy(df)
+        deletecols!(d, 2:3)
+        @test d == DataFrame(a=1, d=4, e=5)
     end
 
     @testset "deleterows!" begin
@@ -380,6 +384,42 @@ module TestDataFrame
         df = DataFrame(a=Union{Int, Missing}[1, 2, 3], b=Union{Float64, Missing}[3.0, 4.0, 5.0])
         @test deleterows!(df, [2, 3]) === df
         @test df == DataFrame(a=[1], b=[3.0])
+
+        df = DataFrame()
+        @test_throws BoundsError deleterows!(df, 10)
+        @test_throws BoundsError deleterows!(df, [10])
+
+        df = DataFrame(a=[])
+        @test_throws BoundsError deleterows!(df, 10)
+        # the exception type changed between Julia 1.0.2 and Julia 1.1
+        # so we use their supertype below
+        @test_throws Exception deleterows!(df, [10])
+
+        df = DataFrame(a=[1, 2, 3], b=[3, 2, 1])
+        @test_throws ArgumentError deleterows!(df, [3,2])
+        @test_throws ArgumentError deleterows!(df, [2,2])
+        @test deleterows!(df, [false, true, false]) === df
+        @test df == DataFrame(a=[1, 3], b=[3, 1])
+
+        x = [1, 2, 3]
+        df = DataFrame(x=x)
+        @test deleterows!(df, 1) == DataFrame(x=[2, 3])
+        @test x == [2, 3]
+
+        x = [1, 2, 3]
+        df = DataFrame(x=x)
+        @test deleterows!(df, [1]) == DataFrame(x=[2, 3])
+        @test x == [2, 3]
+
+        x = [1, 2, 3]
+        df = DataFrame(x=x)
+        @test deleterows!(df, 1:1) == DataFrame(x=[2, 3])
+        @test x == [2, 3]
+
+        x = [1, 2, 3]
+        df = DataFrame(x=x)
+        @test deleterows!(df, [true, false, false]) == DataFrame(x=[2, 3])
+        @test x == [2, 3]
     end
 
     @testset "describe" begin
@@ -511,8 +551,7 @@ module TestDataFrame
 
     df = DataFrame(A = 1:10, B = 'A':'J')
     @test !(df[:] === df)
-    # TODO: uncomment after getindex deprecation period
-    # @test !(df[:,:] === df)
+    @test !(df[:,:] === df)
 
     df = DataFrame(A = 1:2, B = 1:2)
     df2 = DataFrame(A=1:4, B = 1:4)
@@ -658,6 +697,7 @@ module TestDataFrame
         df = DataFrame(A = 1:3, B = 'A':'C')
         @test_throws ArgumentError size(df, 3)
         @test ndims(df) == 2
+        @test ndims(typeof(df)) == 2
         @test (nrow(df), ncol(df)) == (3, 2)
         @test size(df) == (3, 2)
         @inferred nrow(df)
@@ -680,13 +720,7 @@ module TestDataFrame
 
     @testset "misc" begin
         df = DataFrame([collect('A':'C')])
-        @test sprint(dump, df) == """
-                                  $DataFrame  3 observations of 1 variables
-                                    x1: Array{Char}((3,))
-                                      1: Char 'A'
-                                      2: Char 'B'
-                                      3: Char 'C'
-                                  """
+        @test sprint(dump, df) == "DataFrame  3 observations of 1 variables\n  x1: ['A', 'B', 'C']\n\n"
         df = DataFrame(A = 1:12, B = repeat('A':'C', inner=4))
         # @test DataFrames.without(df, 1) == DataFrame(B = repeat('A':'C', inner=4))
     end
@@ -753,6 +787,13 @@ module TestDataFrame
         df[3] = [1,2,3]
         df[4] = [1,2,3]
         @test names(df) == [:x3, :x3_1, :x3_2, :x4]
+        df = DataFrame()
+        @test_throws MethodError df[true] = 1
+        @test_throws MethodError df[true] = [1,2,3]
+        @test_throws MethodError df[1:2, true] = [1,2]
+        @test_throws MethodError df[1, true] = 1
+        @test_throws ArgumentError df[1, 100] = 1
+        @test_throws ArgumentError df[1:2, 100] = [1,2]
     end
 
     @testset "passing range to a DataFrame" begin
@@ -764,17 +805,28 @@ module TestDataFrame
 
     @testset "test corner case of getindex" begin
         df = DataFrame(x=[1], y=[1])
-        @test_throws ArgumentError df[true, 1:2]
+        @test_throws MethodError df[true, 1:2]
+    end
+
+    @testset "empty data frame getindex" begin
+        @test_throws BoundsError DataFrame(x=[])[1, :]
+        @test_throws BoundsError DataFrame()[1, :]
+        @test_throws BoundsError DataFrame()[1:2, :]
+        @test_throws BoundsError DataFrame()[1, Bool[]]
+        @test_throws BoundsError DataFrame()[1:2, Bool[]]
+        @test_throws BoundsError DataFrame(x=[1])[1:2, [false]]
+        @test_throws BoundsError DataFrame(x=[1])[2, [false]]
+        #but this is OK:
+        @test DataFrame(x=[1])[1:1, [false]] == DataFrame()
     end
 
     @testset "handling of end in indexing" begin
         z = DataFrame(rand(4,5))
-        for x in [z] # TODO: re-enable view after getindex deprecation: , view(z, 1:4, :)]
+        for x in [z, view(z, 1:4, :)]
             y = deepcopy(x)
             @test x[end] == x[5]
             @test x[end:end] == x[5:5]
-            # TODO: re-enable after getindex deprecation
-            # @test x[end, :] == x[4, :]
+            @test x[end, :] == x[4, :]
             @test x[end:end, :] == x[4:4, :]
             @test x[end, end] == x[4,5]
             @test x[2:end, 2:end] == x[2:4,2:5]
@@ -919,8 +971,22 @@ module TestDataFrame
         x = DataFrame(a = [1, 2, 3], b = [4, 5, 6])
         v = DataFrame(a = [5, 6, 7], b = [8, 9, 10])
         z = vcat(v, x)
-        #TODO: re-enable after getindex deprecation
-        # @test_throws ArgumentError z[:, [1, 1, 2]]
+        @test_throws ArgumentError z[:, [1, 1, 2]]
         @test_throws ArgumentError z[[1, 1, 2]]
+    end
+
+    @testset "parent, size and axes" begin
+        x = DataFrame(a = [1, 2, 3], b = [4, 5, 6])
+        @test parent(x) === x
+        @test parentindices(x) === (Base.OneTo(3), Base.OneTo(2))
+        @test size(x) == (3,2)
+        @test size(x, 1) == 3
+        @test size(x, 2) == 2
+        @test_throws ArgumentError size(x, 3)
+        @test axes(x) === (Base.OneTo(3), Base.OneTo(2))
+        @test axes(x, 1) === Base.OneTo(3)
+        @test axes(x, 2) === Base.OneTo(2)
+        @test_throws ArgumentError axes(x, 3)
+        @test size(DataFrame()) == (0,0)
     end
 end

@@ -7,6 +7,7 @@ Tables.rowaccess(::Type{DataFrame}) = true
 Tables.rows(df::DataFrame) = Tables.rows(columntable(df))
 
 Tables.schema(df::AbstractDataFrame) = Tables.Schema(names(df), eltypes(df))
+Tables.materializer(df::DataFrame) = DataFrame
 
 getvector(x::AbstractVector) = x
 getvector(x) = collect(x)
@@ -26,6 +27,9 @@ function DataFrame(x)
         y = IteratorInterfaceExtensions.getiterator(x)
         return fromcolumns(Tables.columns(Tables.DataValueUnwrapper(y)))
     elseif it === missing
+        if x isa AbstractVector && all(col -> isa(col, AbstractVector), x)
+            return DataFrame(Vector{AbstractVector}(x))
+        end
         y = IteratorInterfaceExtensions.getiterator(x)
         # non-NamedTuple or EltypeUnknown
         return fromcolumns(Tables.buildcolumns(nothing, Tables.DataValueUnwrapper(y)))
@@ -41,6 +45,6 @@ Base.append!(df::DataFrame, x) = append!(df, DataFrame(x))
 # This supports the Tables.RowTable type; needed to avoid ambiguities w/ another constructor
 DataFrame(x::Vector{T}) where {T <: NamedTuple} = fromcolumns(Tables.columns(Tables.DataValueUnwrapper(x)))
 
-IteratorInterfaceExtensions.getiterator(df::DataFrame) = Tables.datavaluerows(df)
-IteratorInterfaceExtensions.isiterable(x::DataFrame) = true
-TableTraits.isiterabletable(x::DataFrame) = true
+IteratorInterfaceExtensions.getiterator(df::AbstractDataFrame) = Tables.datavaluerows(df)
+IteratorInterfaceExtensions.isiterable(x::AbstractDataFrame) = true
+TableTraits.isiterabletable(x::AbstractDataFrame) = true

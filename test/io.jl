@@ -24,6 +24,17 @@ module TestIO
         @test repr(MIME("text/latex"), df) == str
     end
 
+    @testset "Huge LaTeX export" begin
+        df = DataFrame(a=1:1000)
+        ioc = IOContext(IOBuffer(), :displaysize => (10, 10), :limit => false)
+        show(ioc, "text/latex", df)
+        @test length(String(take!(ioc.io))) > 10000
+
+        io = IOBuffer()
+        show(io, "text/latex", df)
+        @test length(String(take!(io))) < 10000
+    end
+
     #Test HTML output for IJulia and similar
     @testset "HTML output" begin
         df = DataFrame(Fish = ["Suzy", "Amir"], Mass = [1.5, missing])
@@ -44,14 +55,23 @@ module TestIO
         @test str == "<table class=\"data-frame\"><thead><tr><th>" *
                     "</th><th>Fish</th><th>Mass</th></tr>" *
                     "<tr><th></th><th>String</th><th>Float64⍰</th></tr></thead><tbody>" *
-                    "<p>2 rows × 2 columns</p>" * 
+                    "<p>2 rows × 2 columns</p>" *
+                    "<tr><th>1</th><td>#undef</td><td>1.5</td></tr>" *
+                    "<tr><th>2</th><td>#undef</td><td>missing</td></tr></tbody></table>"
+
+        io = IOBuffer()
+        show(io, MIME"text/html"(), df, summary=false)
+        str = String(take!(io))
+        @test str == "<table class=\"data-frame\"><thead><tr><th>" *
+                    "</th><th>Fish</th><th>Mass</th></tr>" *
+                    "<tr><th></th><th>String</th><th>Float64⍰</th></tr></thead><tbody>" *
                     "<tr><th>1</th><td>#undef</td><td>1.5</td></tr>" *
                     "<tr><th>2</th><td>#undef</td><td>missing</td></tr></tbody></table>"
     end
 
     # test limit attribute of IOContext is used
     @testset "limit attribute" begin
-        df = DataFrame(a=collect(1:1000))
+        df = DataFrame(a=1:1000)
         ioc = IOContext(IOBuffer(), :displaysize => (10, 10), :limit => false)
         show(ioc, "text/html", df)
         @test length(String(take!(ioc.io))) > 10000

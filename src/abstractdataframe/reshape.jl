@@ -323,14 +323,7 @@ function _unstack(df::AbstractDataFrame, rowkeys::AbstractVector{Symbol},
     hcat(df1, df2)
 end
 
-function unstack(df::AbstractDataFrame)
-    Base.depwarn("In the future `unstack(df)` will call `unstack(df, :variable, :value)`." *
-                 " use `unstack(df, :id, :variable, :value)` to treat `:id` as the only " *
-                 "`rowkeys` column",
-                 :unstack)
-    unstack(df, :id, :variable, :value)
-end
-
+unstack(df::AbstractDataFrame) = unstack(df, :variable, :value)
 
 ##############################################################################
 ##
@@ -342,6 +335,8 @@ end
 ##############################################################################
 
 """
+    StackedVector <: AbstractVector{Any}
+
 An AbstractVector{Any} that is a linear, concatenated view into
 another set of AbstractVectors
 
@@ -368,7 +363,7 @@ struct StackedVector <: AbstractVector{Any}
     components::Vector{Any}
 end
 
-function Base.getindex(v::StackedVector,i::Integer)
+function Base.getindex(v::StackedVector,i::Int)
     lengths = [length(x)::Int for x in v.components]
     cumlengths = [0; cumsum(lengths)]
     j = searchsortedlast(cumlengths .+ 1, i)
@@ -382,9 +377,9 @@ function Base.getindex(v::StackedVector,i::Integer)
     v.components[j][k]
 end
 
+Base.IndexStyle(::Type{StackedVector}) = Base.IndexLinear()
 Base.size(v::StackedVector) = (length(v),)
 Base.length(v::StackedVector) = sum(map(length, v.components))
-Base.ndims(v::StackedVector) = 1
 Base.eltype(v::StackedVector) = promote_type(map(eltype, v.components)...)
 Base.similar(v::StackedVector, T::Type, dims::Union{Integer, AbstractUnitRange}...) =
     similar(v.components[1], T, dims...)
@@ -393,6 +388,8 @@ CategoricalArrays.CategoricalArray(v::StackedVector) = CategoricalArray(v[:]) # 
 
 
 """
+    RepeatedVector{T} <: AbstractVector{T}
+
 An AbstractVector that is a view into another AbstractVector with
 repeated elements
 
@@ -429,15 +426,15 @@ struct RepeatedVector{T} <: AbstractVector{T}
     outer::Int
 end
 
-function Base.getindex(v::RepeatedVector, i::Integer)
+function Base.getindex(v::RepeatedVector, i::Int)
     N = length(v.parent)
     idx = Base.fld1(mod1(i,v.inner*N),v.inner)
     v.parent[idx]
 end
 
+Base.IndexStyle(::Type{<:RepeatedVector}) = Base.IndexLinear()
 Base.size(v::RepeatedVector) = (length(v),)
 Base.length(v::RepeatedVector) = v.inner * v.outer * length(v.parent)
-Base.ndims(v::RepeatedVector) = 1
 Base.eltype(v::RepeatedVector{T}) where {T} = T
 Base.reverse(v::RepeatedVector) = RepeatedVector(reverse(v.parent), v.inner, v.outer)
 Base.similar(v::RepeatedVector, T::Type, dims::Dims) = similar(v.parent, T, dims)

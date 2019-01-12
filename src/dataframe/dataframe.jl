@@ -127,11 +127,7 @@ struct DataFrame <: AbstractDataFrame
     end
 end
 
-function DataFrame(df::DataFrame)
-    Base.depwarn("In the future DataFrame constructor called with a `DataFrame` argument will return a copy. " *
-                 "Use `convert(DataFrame, df)` to avoid copying if `df` is a `DataFrame`.", :DataFrame)
-    return df
-end
+DataFrame(df::DataFrame) = copy(df)
 
 function DataFrame(pairs::Pair{Symbol,<:Any}...; makeunique::Bool=false)::DataFrame
     colnames = [Symbol(k) for (k,v) in pairs]
@@ -242,8 +238,6 @@ ncol(df::DataFrame) = length(index(df))
 ##
 ##############################################################################
 
-const ColumnIndex = Union{Integer, Symbol}
-
 # df[SingleColumnIndex] => AbstractVector, the same vector
 function Base.getindex(df::DataFrame, col_ind::ColumnIndex)
     selected_column = index(df)[col_ind]
@@ -266,29 +260,6 @@ function Base.getindex(df::DataFrame, row_ind::Integer, col_ind::ColumnIndex)
     return _columns(df)[selected_column][row_ind]
 end
 
-# df[SingleRowIndex, MultiColumnIndex] => DataFrame (will be DatFrameRow)
-function Base.getindex(df::DataFrame, row_ind::Integer, col_inds::AbstractVector)
-    if row_ind isa Bool
-        throw(ArgumentError("invalid row index: $row_ind of type Bool"))
-    end
-    Base.depwarn("Selecting a single row from a `DataFrame` will return a `DataFrameRow` in the future. " *
-                 "To get a `DataFrame` use `df[row_ind:row_ind, col_inds]`.", :getindex)
-    selected_columns = index(df)[col_inds]
-    new_columns = AbstractVector[[dv[row_ind]] for dv in _columns(df)[selected_columns]]
-    return DataFrame(new_columns, Index(_names(df)[selected_columns]))
-end
-
-# df[SingleRowIndex, :] => DataFrame
-function Base.getindex(df::DataFrame, row_ind::Integer, ::Colon)
-    if row_ind isa Bool
-        throw(ArgumentError("invalid row index: $row_ind of type Bool"))
-    end
-    Base.depwarn("Selecting a single row from a `DataFrame` will return a `DataFrameRow` in the future. " *
-                 "To get a `DataFrame` use `df[row_ind:row_ind, :]`.", :getindex)
-    new_columns = AbstractVector[[dv[row_ind]] for dv in _columns(df)]
-    return DataFrame(new_columns, copy(index(df)))
-end
-
 # df[MultiRowIndex, SingleColumnIndex] => AbstractVector, copy
 function Base.getindex(df::DataFrame, row_inds::AbstractVector, col_ind::ColumnIndex)
     selected_column = index(df)[col_ind]
@@ -296,31 +267,43 @@ function Base.getindex(df::DataFrame, row_inds::AbstractVector, col_ind::ColumnI
 end
 
 # df[MultiRowIndex, MultiColumnIndex] => DataFrame
-function Base.getindex(df::DataFrame, row_inds::AbstractVector, col_inds::AbstractVector)
+@inline function Base.getindex(df::DataFrame, row_inds::AbstractVector, col_inds::AbstractVector)
+    @boundscheck if !checkindex(Bool, axes(df, 1), row_inds)
+        throw(BoundsError("attempt to access a data frame with $(nrow(df)) " *
+                          "rows at index $row_inds"))
+    end
     selected_columns = index(df)[col_inds]
     new_columns = AbstractVector[dv[row_inds] for dv in _columns(df)[selected_columns]]
     return DataFrame(new_columns, Index(_names(df)[selected_columns]))
 end
 
 # df[:, SingleColumnIndex] => AbstractVector
+function Base.getindex(df::DataFrame, row_inds::Colon, col_ind::ColumnIndex)
+    selected_column = index(df)[col_ind]
+    copy(_columns(df)[selected_column])
+end
+
 # df[:, MultiColumnIndex] => DataFrame
-function Base.getindex(df::DataFrame, row_ind::Colon, col_inds)
-    Base.depwarn("Indexing with colon as row will create a copy in the future. " *
-                 "Use `df[col_inds]` to get the columns without copying", :getindex)
-    df[col_inds]
+function Base.getindex(df::DataFrame, row_ind::Colon, col_inds::AbstractVector)
+    selected_columns = index(df)[col_inds]
+    new_columns = AbstractVector[copy(dv) for dv in _columns(df)[selected_columns]]
+    return DataFrame(new_columns, Index(_names(df)[selected_columns]))
 end
 
 # df[MultiRowIndex, :] => DataFrame
-function Base.getindex(df::DataFrame, row_inds::AbstractVector, ::Colon)
+@inbounds function Base.getindex(df::DataFrame, row_inds::AbstractVector, ::Colon)
+    @boundscheck if !checkindex(Bool, axes(df, 1), row_inds)
+        throw(BoundsError("attempt to access a data frame with $(nrow(df)) " *
+                          "rows at index $row_inds"))
+    end
     new_columns = AbstractVector[dv[row_inds] for dv in _columns(df)]
     return DataFrame(new_columns, copy(index(df)))
 end
 
 # df[:, :] => DataFrame
 function Base.getindex(df::DataFrame, ::Colon, ::Colon)
-    Base.depwarn("Indexing with colon as row will create a copy of column vectors in the" *
-                 " future. use `df[:]` to get the columns without copying", :getindex)
-    copy(df)
+    new_columns = AbstractVector[copy(dv) for dv in _columns(df)]
+    return DataFrame(new_columns, Index(_names(df)))
 end
 
 ##############################################################################
@@ -368,24 +351,24 @@ function insert_single_column!(df::DataFrame,
     return dv
 end
 
-function insert_single_entry!(df::DataFrame, v::Any, row_ind::Real, col_ind::ColumnIndex)
+function insert_single_entry!(df::DataFrame, v::Any, row_ind::Integer, col_ind::ColumnIndex)
     if haskey(index(df), col_ind)
         _columns(df)[index(df)[col_ind]][row_ind] = v
         return v
     else
-        error("Cannot assign to non-existent column: $col_ind")
+        throw(ArgumentError("Cannot assign to non-existent column: $col_ind"))
     end
 end
 
 function insert_multiple_entries!(df::DataFrame,
                                   v::Any,
-                                  row_inds::AbstractVector{<:Real},
+                                  row_inds::AbstractVector{<:Integer},
                                   col_ind::ColumnIndex)
     if haskey(index(df), col_ind)
         _columns(df)[index(df)[col_ind]][row_inds] .= v
         return v
     else
-        error("Cannot assign to non-existent column: $col_ind")
+        throw(ArgumentError("Cannot assign to non-existent column: $col_ind"))
     end
 end
 
@@ -763,8 +746,47 @@ end
 ##
 ##############################################################################
 
-function deletecols!(df::DataFrame, inds::Vector{Int})
-    for ind in sort(inds, rev = true)
+"""
+    deletecols!(df::DataFrame, ind)
+
+Delete columns specified by `ind` from a `DataFrame` `df` in place and return it.
+
+Argument `ind` can be any index that is allowed for column indexing of
+a `DataFrame` provided that the columns requested to be removed are unique.
+
+### Examples
+
+```jldoctest
+julia> d = DataFrame(a=1:3, b=4:6)
+3×2 DataFrame
+│ Row │ a     │ b     │
+│     │ Int64 │ Int64 │
+├─────┼───────┼───────┤
+│ 1   │ 1     │ 4     │
+│ 2   │ 2     │ 5     │
+│ 3   │ 3     │ 6     │
+
+julia> deletecols!(d, 1)
+3×1 DataFrame
+│ Row │ b     │
+│     │ Int64 │
+├─────┼───────┤
+│ 1   │ 4     │
+│ 2   │ 5     │
+│ 3   │ 6     │
+```
+
+"""
+function deletecols!(df::DataFrame, inds::AbstractVector{Int})
+    sorted_inds = sort(inds, rev=true)
+    for i in 2:length(sorted_inds)
+        if sorted_inds[i] == sorted_inds[i-1]
+            indpos = join(findall(==(sorted_inds[i]), inds), ", ", " and ")
+            throw(ArgumentError("Duplicate values in inds found at positions" *
+                                " $indpos."))
+        end
+    end
+    for ind in sorted_inds
         if 1 <= ind <= ncol(df)
             splice!(_columns(df), ind)
             delete!(index(df), ind)
@@ -777,36 +799,51 @@ end
 deletecols!(df::DataFrame, c::Int) = deletecols!(df, [c])
 deletecols!(df::DataFrame, c::Any) = deletecols!(df, index(df)[c])
 
-function deleterows!(df::DataFrame, ind::Union{Integer, UnitRange{Int}})
-    for i in 1:ncol(df)
-        _columns(df)[i] = deleteat!(_columns(df)[i], ind)
+"""
+    deleterows!(df::DataFrame, ind)
+
+Delete rows specified by `ind` from a `DataFrame` `df` in place and return it.
+
+Internally `deleteat!` is called for all columns so `ind` must
+be: a vector of sorted and unique integers, a boolean vector or an integer.
+
+### Examples
+
+```jldoctest
+julia> d = DataFrame(a=1:3, b=4:6)
+3×2 DataFrame
+│ Row │ a     │ b     │
+│     │ Int64 │ Int64 │
+├─────┼───────┼───────┤
+│ 1   │ 1     │ 4     │
+│ 2   │ 2     │ 5     │
+│ 3   │ 3     │ 6     │
+
+julia> deleterows!(d, 2)
+2×2 DataFrame
+│ Row │ a     │ b     │
+│     │ Int64 │ Int64 │
+├─────┼───────┼───────┤
+│ 1   │ 1     │ 4     │
+│ 2   │ 3     │ 6     │
+```
+
+"""
+function deleterows!(df::DataFrame, ind)
+    if !isempty(ind) && size(df, 2) == 0
+        throw(BoundsError())
     end
+    # we require ind to be stored and unique like in Base
+    foreach(col -> deleteat!(col, ind), _columns(df))
     df
 end
 
-function deleterows!(df::DataFrame, ind::AbstractVector{Int})
-    ind2 = sort(ind)
-    n = size(df, 1)
-
-    idf = 1
-    iind = 1
-    ikeep = 1
-    keep = Vector{Int}(undef, n-length(ind2))
-    while idf <= n && iind <= length(ind2)
-        1 <= ind2[iind] <= n || error(BoundsError())
-        if idf == ind2[iind]
-            iind += 1
-        else
-            keep[ikeep] = idf
-            ikeep += 1
-        end
-        idf += 1
+function deleterows!(df::DataFrame, ind::AbstractVector{Bool})
+    if length(ind) != size(df, 1)
+        throw(BoundsError())
     end
-    keep[ikeep:end] = idf:n
-
-    for i in 1:ncol(df)
-        _columns(df)[i] = _columns(df)[i][keep]
-    end
+    drop = findall(ind)
+    foreach(col -> deleteat!(col, drop), _columns(df))
     df
 end
 

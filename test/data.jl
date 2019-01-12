@@ -27,8 +27,7 @@ module TestData
         @test df6[2, :C] == "two"
         @test df6[:B] ≅ [1, 2, missing, 4]
         @test size(df6[[2,3]], 2) == 2
-        # TODO: reenable after getinex deprecation period
-        # @test size(df6[2,:], 1) == 1
+        @test size(df6[2,:], 1) == ncol(df6) # this is a DataFrameRow
         @test size(df6[2:2,:], 1) == 1
         @test size(df6[[1, 3], [1, 3]]) == (2, 2)
         @test size(df6[1:2, 1:2]) == (2, 2)
@@ -73,6 +72,17 @@ module TestData
             @test df4b == df4
         end
 
+        df = DataFrame(a=[1, missing, 3])
+        sdf = view(df, :, :)
+        @test dropmissing(sdf) == DataFrame(a=[1, 3])
+        @test eltype(dropmissing(sdf, disallowmissing=false)[:a]) == Union{Int, Missing}
+        @test eltype(dropmissing(sdf, disallowmissing=true)[:a]) == Int
+         df2 = copy(df)
+        dropmissing!(df, disallowmissing=true)
+        dropmissing!(df2, disallowmissing=false)
+        @test eltype(df.a) == Int
+        @test eltype(df2.a) == Union{Int, Missing}
+
         #test_context("SubDataFrames")
 
         #test_group("constructors")
@@ -87,10 +97,9 @@ module TestData
         @test size(sdf6e) == (1,3)
         sdf6f = view(df6, UInt64[1, 2], :)
         @test size(sdf6f) == (2,3)
-        # TODO: add those tests after getindex deprecation period
-        # sdf6g = view(df6, [1,3], :B)
-        # sdf6h = view(df6, 1, :B)
-        # sdf6i = view(df6, 1, [:B])
+        sdf6g = view(df6, [1,3], :B)
+        sdf6h = view(df6, 1, :B)
+        sdf6i = view(df6, 1, [:B])
 
         #test_group("ref")
         @test sdf6a[1,2] == 4
@@ -167,7 +176,7 @@ module TestData
                          [:d1, :d2, :d3, :d4])
 
         gd = groupby(df10, [:d3], sort=true)
-        ggd = groupby(gd[1], [:d3, :d4], sort=true) # make sure we can groupby subDataFrames
+        ggd = groupby(gd[1], [:d3, :d4], sort=true) # make sure we can groupby SubDataFrames
         @test ggd[1][1, :d3] == "a"
         @test ggd[1][1, :d4] == "c"
         @test ggd[1][2, :d3] == "a"
@@ -175,7 +184,7 @@ module TestData
         @test ggd[2][1, :d3] == "a"
         @test ggd[2][1, :d4] == "d"
     end
-    
+
     @testset "reshape" begin
         d1 = DataFrame(a = Array{Union{Int, Missing}}(repeat([1:3;], inner = [4])),
                     b = Array{Union{Int, Missing}}(repeat([1:4;], inner = [3])),
@@ -220,23 +229,30 @@ module TestData
 
         # Tests of RepeatedVector and StackedVector indexing
         d1s = stackdf(d1, [:a, :b])
+        @test d1s[1] isa DataFrames.RepeatedVector
+        @test ndims(d1s[1]) == 1
+        @test ndims(typeof(d1s[1])) == 1
+        @test d1s[2] isa DataFrames.StackedVector
+        @test ndims(d1s[2]) == 1
+        @test ndims(typeof(d1s[2])) == 1
         @test d1s[1][[1,24]] == [:a, :b]
         @test d1s[2][[1,24]] == [1, 4]
-        # TODO: enable those tests after deprecation period of getindex
-        # @test d1s[1][true]
-        # @test d1s[1][1.0]
-        # @test d1s[2][true]
-        # @test d1s[2][1.0]
-        
+        if VERSION >= v"1" # this was silently accepted pre Julia 1.0
+            @test_throws ArgumentError d1s[1][true]
+            @test_throws ArgumentError d1s[2][true]
+        end
+        @test_throws ArgumentError d1s[1][1.0]
+        @test_throws ArgumentError d1s[2][1.0]
+
         # Those tests check indexing RepeatedVector/StackedVector by a vector
-        d1s[1][trues(24)] == d1s[1]
-        d1s[2][trues(24)] == d1s[2]
-        d1s[1][:] == d1s[1]
-        d1s[2][:] == d1s[2]
-        d1s[1][1:24] == d1s[1]
-        d1s[2][1:24] == d1s[2]
-        [d1s[1][1:12]; d1s[1][13:24]] == d1s[1]
-        [d1s[2][1:12]; d1s[2][13:24]] == d1s[2]
+        @test d1s[1][trues(24)] == d1s[1]
+        @test d1s[2][trues(24)] == d1s[2]
+        @test d1s[1][:] == d1s[1]
+        @test d1s[2][:] == d1s[2]
+        @test d1s[1][1:24] == d1s[1]
+        @test d1s[2][1:24] == d1s[2]
+        @test [d1s[1][1:12]; d1s[1][13:24]] == d1s[1]
+        @test [d1s[2][1:12]; d1s[2][13:24]] == d1s[2]
 
         d1s2 = stackdf(d1, [:c, :d])
         d1s3 = stackdf(d1)
@@ -263,11 +279,13 @@ module TestData
         @test d1us2[:d] == d1[:d]
         @test d1us2[3] == d1[:d]
         @test d1us3[:d] == d1[:d]
+        @test d1us3 == unstack(d1s2)
 
         # test unstack with exactly one key column that is not passed
         df1 = melt(DataFrame(rand(10,10)))
         df1[:id] = 1:100
         @test size(unstack(df1, :variable, :value)) == (100, 11)
+        @test unstack(df1, :variable, :value) ≅ unstack(df1)
 
         # test empty keycol
         @test_throws ArgumentError unstack(melt(DataFrame(rand(3,2))), :variable, :value)

@@ -92,7 +92,7 @@ function html_escape(cell::AbstractString)
     return cell
 end
 
-function Base.show(io::IO, ::MIME"text/html", df::AbstractDataFrame)
+function Base.show(io::IO, ::MIME"text/html", df::AbstractDataFrame; summary::Bool=true)
     cnames = _names(df)
     write(io, "<table class=\"data-frame\">")
     write(io, "<thead>")
@@ -119,7 +119,9 @@ function Base.show(io::IO, ::MIME"text/html", df::AbstractDataFrame)
     else
         mxrow = n
     end
-    write(io, "<p>$(digitsep(n)) rows × $(digitsep(ncol(df))) columns</p>")
+    if summary
+        write(io, "<p>$(digitsep(n)) rows × $(digitsep(ncol(df))) columns</p>")
+    end
     for row in 1:mxrow
         write(io, "<tr>")
         write(io, "<th>$row</th>")
@@ -168,6 +170,15 @@ end
 function Base.show(io::IO, ::MIME"text/latex", df::AbstractDataFrame)
     nrows = size(df, 1)
     ncols = size(df, 2)
+
+    haslimit = get(io, :limit, true)
+    if haslimit
+        tty_rows, tty_cols = displaysize(io)
+        mxrow = min(nrows,tty_rows)
+    else
+        mxrow = nrows
+    end
+
     cnames = _names(df)
     alignment = repeat("c", ncols)
     write(io, "\\begin{tabular}{r|")
@@ -178,7 +189,7 @@ function Base.show(io::IO, ::MIME"text/latex", df::AbstractDataFrame)
     write(io, header)
     write(io, "\\\\\n")
     write(io, "\t\\hline\n")
-    for row in 1:nrows
+    for row in 1:mxrow
         write(io, "\t")
         write(io, @sprintf("%d", row))
         for col in 1:ncols
@@ -191,6 +202,13 @@ function Base.show(io::IO, ::MIME"text/latex", df::AbstractDataFrame)
                     print(io, latex_escape(sprint(ourshowcompact, cell)))
                 end
             end
+        end
+        write(io, " \\\\\n")
+    end
+    if nrows > mxrow
+        write(io, "\t\$\\dots\$")
+        for col in 1:ncols
+            write(io, " & \$\\dots\$")
         end
         write(io, " \\\\\n")
     end
