@@ -298,18 +298,18 @@ module TestCat
         df2 = DataFrame(B = 1, C = 1)
         err = @test_throws ArgumentError vcat(df1, df2)
         @test err.value.msg == "column(s) C are missing from argument(s) 1, and column(s) A are missing from argument(s) 2"
-        @test mr(vcat(df1, df2, kep = :all), 999) == DataFrame([1 1 999;
+        @test mr(vcat(df1, df2, keep = :all), 999) == DataFrame([1 1 999;
                                                                   999 1 1],
                                                                  [:A, :B, :C])
         df1 = DataFrame(A = 1, B = 1)
         df2 = DataFrame(B = 1, C = 1)
-        @test mr(vcat(df1, df2, widen = true, keep = [:A, :C]), 999) == DataFrame([1 999;
-                                                                                   999 1],
-                                                                                  [:A, :C])
+        @test mr(vcat(df1, df2, keep = [:A, :C]), 999) == DataFrame([1 999;
+                                                                     999 1],
+                                                                    [:A, :C])
         df1 = DataFrame(A = 1.0, B = 1.0)
         df2 = DataFrame(B = 1, C = 1)
-        @test mr(vcat(df1, df2, widen = true), 999.0) == DataFrame([1.0 1.0 999.0;
-                                                                    999.0 1.0 1.0],
-                                                                   [:A, :B, :C])
+        @test mr(vcat(df1, df2, keep = :all), 999.0) == DataFrame([1.0 1.0 999.0;
+                                                                   999.0 1.0 1.0],
+                                                                  [:A, :B, :C])
     end
 end
