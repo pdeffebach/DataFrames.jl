@@ -1000,16 +1000,11 @@ function _vcat(dfs::AbstractVector{<:AbstractDataFrame};
                keep::Union{Nothing, Vector{Symbol}} = nothing)
     
     isempty(dfs) && return DataFrame()
-    # array of all headers
-    @show allheaders = map(names, dfs)
-    # unique arrays of all headers
-    @show uniqueheaders = unique(allheaders)
-    # Array of all the unique headers
-    @show unionunique = union(uniqueheaders...)
-    # Intersection of all unique headers 
-    @show intersectunique = intersect(uniqueheaders...)
-    # get the elements that are not present in everything
-    @show coldiff = setdiff(unionunique, intersectunique)
+    allheaders = map(names, dfs)
+    uniqueheaders = unique(allheaders)
+    unionunique = union(uniqueheaders...)
+    intersectunique = intersect(uniqueheaders...)
+    coldiff = setdiff(unionunique, intersectunique)
 
     if (widen == false) && !isempty(coldiff)
         # if any DataFrames are a full superset of names, skip them
@@ -1037,7 +1032,6 @@ function _vcat(dfs::AbstractVector{<:AbstractDataFrame};
     length(header) == 0 && return DataFrame()
     cols = Vector{AbstractVector}(undef, length(header))
     for (i, name) in enumerate(header)
-<<<<<<< HEAD
         # TODO: replace with commented out code after getindex deprecation
         # data = [df[name] for df in dfs]
         # the code below assumes that only DataFrame and SubDataFrame
@@ -1062,9 +1056,6 @@ function _vcat(dfs::AbstractVector{<:AbstractDataFrame};
             end
         end
 
-=======
-        data = [df[name] for df in dfs]
->>>>>>> master
         lens = map(length, data)
         T = mapreduce(eltype, promote_type, data)
         cols[i] = Tables.allocatecolumn(T, sum(lens))
