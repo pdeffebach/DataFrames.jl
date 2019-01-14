@@ -956,7 +956,9 @@ Base.hcat(df1::AbstractDataFrame, df2::AbstractDataFrame, dfn::AbstractDataFrame
     hcat!(hcat(df1, df2, makeunique=makeunique), dfn..., makeunique=makeunique)
 
 """
-    vcat(dfs::AbstractDataFrame...)
+    vcat(dfs::AbstractDataFrame...;
+         keep::Union{Nothing, Symbol, Vector{Symbol}} = nothing,
+         fillvalue = missing)
 
 Vertically concatenate `AbstractDataFrames`.
 
@@ -964,7 +966,18 @@ Column names in all passed data frames must be the same, but they can have
 different order. In such cases the order of names in the first passed
 `DataFrame` is used.
 
-# Example
+If passing `keep`, the concatenation is made more flexible by allowing for all
+or a selection of columns across all `DataFrame`s. Passing `keep = :all` will
+retain the union of all headers. You may also pass an array of desired columns
+as symbols, which will restrict the output to only return those.
+
+`fillvalue` is what is used to fill in missing data, and is thusly set to
+`missing` by default. Care should be taken when setting it to any other value,
+as you may risk setting filled column types to `Any`. It may be safer and more
+performant to let the fill be `missing`, and call something like the following
+for finer control: `df[c] = collect(Missings.replace(df[c], replacement))`
+
+# Examples
 ```jldoctest
 julia> df1 = DataFrame(A=1:3, B=1:3);
 
@@ -981,23 +994,52 @@ julia> vcat(df1, df2)
 │ 4   │ 4     │ 4     │
 │ 5   │ 5     │ 5     │
 │ 6   │ 6     │ 6     │
+
+julia> df3 = DataFrame(B=7:9, C=7:9)
+
+julia> vcat(df1, df2, df3, keep = :all)
+9×3 DataFrame
+│ Row │ A       │ B     │ C       │
+│     │ Int64⍰  │ Int64 │ Int64⍰  │
+├─────┼─────────┼───────┼─────────┤
+│ 1   │ 1       │ 1     │ missing │
+│ 2   │ 2       │ 2     │ missing │
+│ 3   │ 3       │ 3     │ missing │
+│ 4   │ 4       │ 4     │ missing │
+│ 5   │ 5       │ 5     │ missing │
+│ 6   │ 6       │ 6     │ missing │
+│ 7   │ missing │ 7     │ 7       │
+│ 8   │ missing │ 8     │ 8       │
+│ 9   │ missing │ 9     │ 9       │
+
+julia> vcat(df1, df2, df3, keep = [:B, :C])
+9×2 DataFrame
+│ Row │ B     │ C       │
+│     │ Int64 │ Int64⍰  │
+├─────┼───────┼─────────┤
+│ 1   │ 1     │ missing │
+│ 2   │ 2     │ missing │
+│ 3   │ 3     │ missing │
+│ 4   │ 4     │ missing │
+│ 5   │ 5     │ missing │
+│ 6   │ 6     │ missing │
+│ 7   │ 7     │ 7       │
+│ 8   │ 8     │ 8       │
+│ 9   │ 9     │ 9       │
 ```
 """
-Base.vcat(df::AbstractDataFrame; 
-        widen::Bool = false, 
-        fillvalue = missing, 
-        keep::Union{Nothing, Vector{Symbol}} = nothing) = df
+Base.vcat(df::AbstractDataFrame;
+        keep::Union{Nothing, Symbol, Vector{Symbol}} = nothing,
+        fillvalue = missing) = df
 
 Base.vcat(dfs::AbstractDataFrame...;
-          widen::Bool = false, 
-          fillvalue = missing,
-          keep::Union{Nothing, Vector{Symbol}} = nothing) = 
-    _vcat(collect(dfs); widen = widen, fillvalue = fillvalue, keep = keep)
+          keep::Union{Nothing, Symbol, Vector{Symbol}} = nothing,
+          fillvalue = missing) =
+    _vcat(collect(dfs); fillvalue = fillvalue, keep = keep)
 
-function _vcat(dfs::AbstractVector{<:AbstractDataFrame}; 
-               widen::Bool = false, 
-               fillvalue = missing,
-               keep::Union{Nothing, Vector{Symbol}} = nothing)
+function _vcat(dfs::AbstractVector{<:AbstractDataFrame};
+               keep::Union{Nothing, Symbol, Vector{Symbol}} = nothing,
+               fillvalue = missing)
     
     isempty(dfs) && return DataFrame()
     allheaders = map(names, dfs)
@@ -1006,7 +1048,7 @@ function _vcat(dfs::AbstractVector{<:AbstractDataFrame};
     intersectunique = intersect(uniqueheaders...)
     coldiff = setdiff(unionunique, intersectunique)
 
-    if (widen == false) && !isempty(coldiff)
+    if (keep == nothing) && !isempty(coldiff)
         # if any DataFrames are a full superset of names, skip them
         filter!(u -> Set(u) != Set(unionunique), uniqueheaders)
         estrings = Vector{String}(undef, length(uniqueheaders))
@@ -1020,14 +1062,14 @@ function _vcat(dfs::AbstractVector{<:AbstractDataFrame};
         throw(ArgumentError(join(estrings, ", ", ", and ")))
     end
 
-    # TODO: get preserve order of first headers as much 
-    # as possible 
-    # Formerly this was done with: 
+    # TODO: get preserve order of first headers as much as possible.
+    # Formerly this was done with:
     # header = allheaders[1]
 
     # TODO: make sure that `keep` can't throws a good error if 
     # it a) isn't in `allheaders` or b) isn't a subset of `unionunique`
-    header = (keep == nothing) ? unionunique : keep 
+    keepcols = (keep != nothing && keep == :all) ? unionunique : keep
+    header = (keep == nothing) ? unionunique : keepcols
     
     length(header) == 0 && return DataFrame()
     cols = Vector{AbstractVector}(undef, length(header))

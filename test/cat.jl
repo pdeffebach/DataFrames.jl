@@ -286,7 +286,7 @@ module TestCat
     y = DataFrame(A = 4:5)
     @test vcat(x, y) == DataFrame(A = [2, 4, 5])
 
-    @testset "vcat keepcols" begin
+    @testset "vcat keep" begin
         # Need a missings-replacer function, so comparisons work
         function mr(df, replacement)
             for c in names(df)
@@ -298,7 +298,7 @@ module TestCat
         df2 = DataFrame(B = 1, C = 1)
         err = @test_throws ArgumentError vcat(df1, df2)
         @test err.value.msg == "column(s) C are missing from argument(s) 1, and column(s) A are missing from argument(s) 2"
-        @test mr(vcat(df1, df2, widen = true), 999) == DataFrame([1 1 999;
+        @test mr(vcat(df1, df2, kep = :all), 999) == DataFrame([1 1 999;
                                                                   999 1 1],
                                                                  [:A, :B, :C])
         df1 = DataFrame(A = 1, B = 1)
