@@ -458,7 +458,7 @@ where each row represents a variable and each column a summary statistic.
     - A symbol from the list `:mean`, `:std`, `:min`, `:q25`,
       `:median`, `:q75`, `:max`, `:eltype`, `:nunique`, `:first`, `:last`, and
       `:nmissing`. The default statistics used are `:mean`, `:min`, `:median`,
-      `:max`, `:nmissing`, and `:eltype`.
+      `:max`, `:nunique`, `:nmissing`, and `:eltype`.
     - `:all` as the only `Symbol` argument to return all statistics.
     - A `name => function` pair where `name` is a `Symbol` or string. This will
       create a column of summary statistics with the provided name.
@@ -476,7 +476,10 @@ number of unique values in a column. If a column's base type derives from `Real`
 `:nunique` will return `nothing`s.
 
 Missing values are filtered in the calculation of all statistics, however the
-column `:nmissing` will report the number of missing values of that variable.
+column `:nmissing` will report the number of missing values of that variable. If
+the column does not allow missing values, `nothing` is returned. Consequently,
+`nmissing = 0` indicates that the column allows missing values, but does not
+currently contain any.
 
 If custom functions are provided, they are called repeatedly with the vector
 corresponding to each column as the only argument. For columns allowing for
@@ -486,16 +489,30 @@ access missing values.
 
 # Examples
 ```julia
-julia> df = DataFrame(i=1:10, x=0.1:0.1:1.0, y='a':'j');
+julia> df = DataFrame(i=1:10, x=0.1:0.1:1.0, y='a':'j')
+10×3 DataFrame
+│ Row │ i     │ x       │ y    │
+│     │ Int64 │ Float64 │ Char │
+├─────┼───────┼─────────┼──────┤
+│ 1   │ 1     │ 0.1     │ 'a'  │
+│ 2   │ 2     │ 0.2     │ 'b'  │
+│ 3   │ 3     │ 0.3     │ 'c'  │
+│ 4   │ 4     │ 0.4     │ 'd'  │
+│ 5   │ 5     │ 0.5     │ 'e'  │
+│ 6   │ 6     │ 0.6     │ 'f'  │
+│ 7   │ 7     │ 0.7     │ 'g'  │
+│ 8   │ 8     │ 0.8     │ 'h'  │
+│ 9   │ 9     │ 0.9     │ 'i'  │
+│ 10  │ 10    │ 1.0     │ 'j'  │
 
 julia> describe(df)
-3×7 DataFrame
-│ Row │ variable │ mean   │ min │ median │ max │ nmissing │ eltype   │
-│     │ Symbol   │ Union… │ Any │ Union… │ Any │ Int64    │ DataType │
-├─────┼──────────┼────────┼─────┼────────┼─────┼──────────┼──────────┤
-│ 1   │ i        │ 5.5    │ 1   │ 5.5    │ 10  │ 0        │ Int64    │
-│ 2   │ x        │ 0.55   │ 0.1 │ 0.55   │ 1.0 │ 0        │ Float64  │
-│ 3   │ y        │        │ 'a' │        │ 'j' │ 0        │ Char     │
+3×8 DataFrame
+│ Row │ variable │ mean   │ min │ median │ max │ nunique │ nmissing │ eltype   │
+│     │ Symbol   │ Union… │ Any │ Union… │ Any │ Union…  │ Nothing  │ DataType │
+├─────┼──────────┼────────┼─────┼────────┼─────┼─────────┼──────────┼──────────┤
+│ 1   │ i        │ 5.5    │ 1   │ 5.5    │ 10  │         │          │ Int64    │
+│ 2   │ x        │ 0.55   │ 0.1 │ 0.55   │ 1.0 │         │          │ Float64  │
+│ 3   │ y        │        │ 'a' │        │ 'j' │ 10      │          │ Char     │
 
 julia> describe(df, :min, :max)
 3×3 DataFrame
@@ -530,7 +547,7 @@ DataAPI.describe(df::AbstractDataFrame,
 
 DataAPI.describe(df::AbstractDataFrame; cols=:) =
     _describe(select(df, cols, copycols=false),
-              [:mean, :min, :median, :max, :nmissing, :eltype])
+              [:mean, :min, :median, :max, :nunique, :nmissing, :eltype])
 
 function _describe(df::AbstractDataFrame, stats::AbstractVector)
     predefined_funs = Symbol[s for s in stats if s isa Symbol]
@@ -577,7 +594,7 @@ function _describe(df::AbstractDataFrame, stats::AbstractVector)
         end
 
         if :nmissing in predefined_funs
-            d[:nmissing] = count(ismissing, col)
+            d[:nmissing] = eltype(col) >: Missing ? count(ismissing, col) : nothing
         end
 
         if :first in predefined_funs
@@ -638,7 +655,7 @@ function get_stats(col::AbstractVector, stats::AbstractVector{Symbol})
         if eltype(col) <: Real
             d[:nunique] = nothing
         else
-            d[:nunique] = try length(Set(col)) catch end
+            d[:nunique] = try length(unique(col)) catch end
         end
     end
 
@@ -870,20 +887,20 @@ function dropmissing!(df::AbstractDataFrame,
 end
 
 """
-    filter(fun, df::AbstractDataFrame)
-    filter(cols => fun, df::AbstractDataFrame)
+    filter(function, df::AbstractDataFrame)
+    filter(cols => function, df::AbstractDataFrame)
 
-Return a copy of data frame `df` containing only rows for which `fun`
+Return a copy of data frame `df` containing only rows for which `function`
 returns `true`.
 
-If `cols` is not specified then the predicate `fun` is passed `DataFrameRow`s.
+If `cols` is not specified then the function is passed `DataFrameRow`s.
 
-If `cols` is specified then the predicate `fun` is passed elements of the
-corresponding columns as separate positional arguments, unless `cols` is an
-`AsTable` selector, in which case a `NamedTuple` of these arguments is passed.
-`cols` can be any column selector ($COLUMNINDEX_STR; $MULTICOLUMNINDEX_STR), and
-column duplicates are allowed if a vector of `Symbol`s, strings, or integers is
-passed.
+If `cols` is specified then the function is passed elements of the corresponding
+columns as separate positional arguments, unless `cols` is an `AsTable` selector,
+in which case a `NamedTuple` of these arguments is passed.
+`cols` can be any column selector ($COLUMNINDEX_STR; $MULTICOLUMNINDEX_STR),
+and column duplicates are allowed if a vector of `Symbol`s, strings, or integers
+is passed.
 
 Passing `cols` leads to a more efficient execution of the operation for large data frames.
 
@@ -943,6 +960,7 @@ Base.filter((cols, f)::Pair{<:AbstractVector{Symbol}}, df::AbstractDataFrame) =
     filter([index(df)[col] for col in cols] => f, df)
 Base.filter((cols, f)::Pair{<:AbstractVector{<:AbstractString}}, df::AbstractDataFrame) =
     filter([index(df)[col] for col in cols] => f, df)
+
 Base.filter((cols, f)::Pair, df::AbstractDataFrame) =
     filter(index(df)[cols] => f, df)
 
@@ -959,30 +977,29 @@ function _filter_helper(df::AbstractDataFrame, f, cols...)
 end
 
 function Base.filter((cols, f)::Pair{<:AsTable}, df::AbstractDataFrame)
-    df_tmp = select(df, cols.cols, copycols=false)
-    if ncol(df_tmp) == 0
+    dff = select(df, cols.cols, copycols=false)
+    if ncol(dff) == 0
         throw(ArgumentError("At least one column must be passed to filter on"))
     end
-    return _filter_helper_astable(df, Tables.namedtupleiterator(df_tmp), f)
+    return _filter_helper_astable(df, Tables.namedtupleiterator(dff), f)
 end
 
 _filter_helper_astable(df::AbstractDataFrame, nti::Tables.NamedTupleIterator, f) =
     df[(x -> f(x)::Bool).(nti), :]
 
 """
-    filter!(fun, df::AbstractDataFrame)
-    filter!(cols => fun, df::AbstractDataFrame)
+    filter!(function, df::AbstractDataFrame)
+    filter!(cols => function, df::AbstractDataFrame)
 
-Remove rows from data frame `df` for which `fun` returns `false`.
+Remove rows from data frame `df` for which `function` returns `false`.
 
-If `cols` is not specified then the predicate `fun` is passed `DataFrameRow`s.
-
-If `cols` is specified then the predicate `fun` is passed elements of the
-corresponding columns as separate positional arguments, unless `cols` is an
-`AsTable` selector, in which case a `NamedTuple` of these arguments is passed.
-`cols` can be any column selector ($COLUMNINDEX_STR; $MULTICOLUMNINDEX_STR), and
-column duplicates are allowed if a vector of `Symbol`s, strings, or integers is
-passed.
+If `cols` is not specified then the function is passed `DataFrameRow`s.
+If `cols` is specified then the function is passed elements of the corresponding
+columns as separate positional arguments, unless `cols` is an `AsTable` selector,
+in which case a `NamedTuple` of these arguments is passed.
+`cols` can be any column selector ($COLUMNINDEX_STR; $MULTICOLUMNINDEX_STR),
+and column duplicates are allowed if a vector of `Symbol`s, strings, or integers
+is passed.
 
 Passing `cols` leads to a more efficient execution of the operation for large data frames.
 
@@ -1391,10 +1408,9 @@ function _vcat(dfs::AbstractVector{<:AbstractDataFrame};
                                 "have the same column names and be in the same order"))
         end
     elseif cols === :setequal || cols === :equal
-        # an explicit error is thrown as :equal was supported in the past
         if cols === :equal
-            throw(ArgumentError("`cols=:equal` is not supported. " *
-                                "Use `:setequal` instead."))
+            Base.depwarn("`cols=:equal` is deprecated." *
+                         "Use `:setequal` instead.", :vcat)
         end
 
         header = unionunique

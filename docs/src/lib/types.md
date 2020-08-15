@@ -37,14 +37,12 @@ or when accessing a single row of a `DataFrame` or `SubDataFrame` via `getindex`
 
 The `eachrow` function returns a value of the `DataFrameRows` type, which
 serves as an iterator over rows of an `AbstractDataFrame`, returning `DataFrameRow` objects.
-The `DataFrameRows` is a subtype of `AbstractVector` and supports its interface
-with the exception that it is read-only.
 
 Similarly, the `eachcol` function returns a value of the `DataFrameColumns` type, which
-is not an `AbstractVector`, but supports most of its API. The key differences are that it is read-only and
-that the `keys` function returns a vector of `Symbol`s (and not integers as for normal vectors).
+serves as an iterator over columns of an `AbstractDataFrame`.
 
-Note that `DataFrameRows` and `DataFrameColumns` are not exported and should not be constructed directly,
+The `DataFrameRows` and `DataFrameColumns` types are subtypes of `AbstractVector` and support its interface
+with the exception that they are read only. Note that they are not exported and should not be constructed directly,
 but using the `eachrow` and `eachcol` functions.
 
 The `RepeatedVector` and `StackedVector` types are subtypes of `AbstractVector` and support its interface
@@ -60,7 +58,8 @@ selector should be passed as a `NamedTuple` to the function.
 ## [The design of handling of columns of a `DataFrame`](@id man-columnhandling)
 
 When a `DataFrame` is constructed columns are copied by default. You can disable
-this behavior by setting `copycols` keyword argument to `false`.
+this behavior by setting `copycols` keyword argument to `false` or by using the
+[`DataFrame!`](@ref) function.
 The exception is if an `AbstractRange` is passed as a column, then it is always collected to a `Vector`.
 
 Also functions that transform a `DataFrame` to produce a new `DataFrame` perform a copy of the columns,
@@ -113,6 +112,7 @@ AbstractDataFrame
 AsTable
 ByRow
 DataFrame
+DataFrame!
 DataFrameRow
 GroupedDataFrame
 GroupKey

@@ -120,6 +120,5 @@ disallowmissing!
 ```@docs
 eachcol
 eachrow
-values
 pairs
 ```

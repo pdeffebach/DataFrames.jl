@@ -1,7 +1,3 @@
-# this constant defines which types of values returned by aggregation function
-# in combine are considered to produce multiple columns in the resulting data frame
-const MULTI_COLS_TYPE = Union{AbstractDataFrame, NamedTuple, DataFrameRow, AbstractMatrix}
-
 """
     groupby(d::AbstractDataFrame, cols; sort=false, skipmissing=false)
 
@@ -37,8 +33,9 @@ and combines the result into a data frame).
 which can also be used to get the values of the grouping columns for each group.
 `Tuples` and `NamedTuple`s containing the values of the grouping columns (in the
 same order as the `cols` argument) are also accepted as indices, but this will
-be slower than using the equivalent `GroupKey`. Finally, a `Dict` can be used to index
-into a grouped data frame where the keys are column names of the data frame in any order. 
+be slower than using the equivalent `GroupKey`. Finally, a `Dict` with
+column names as keys can be used (order does not matter in this case).
+Note that indexing with `GroupKey` is faster than other methods.
 
 # See also
 
@@ -150,19 +147,18 @@ function groupby(df::AbstractDataFrame, cols;
                  sort::Bool=false, skipmissing::Bool=false)
     _check_consistency(df)
     idxcols = index(df)[cols]
-    if isempty(idxcols)
-        return GroupedDataFrame(df, Symbol[], ones(Int, nrow(df)),
-                                nothing, nothing, nothing, nrow(df) == 0 ? 0 : 1,
-                                nothing, Threads.ReentrantLock())
+    intcols = idxcols isa Int ? [idxcols] : convert(Vector{Int}, idxcols)
+    if isempty(intcols)
+        return GroupedDataFrame(df, intcols, ones(Int, nrow(df)),
+                                collect(axes(df, 1)), [1], [nrow(df)], 1, nothing)
     end
-    sdf = select(df, idxcols, copycols=false)
+    sdf = df[!, intcols]
 
     groups = Vector{Int}(undef, nrow(df))
     ngroups, rhashes, gslots, sorted =
         row_group_slots(ntuple(i -> sdf[!, i], ncol(sdf)), Val(false), groups, skipmissing)
 
-    gd = GroupedDataFrame(df, copy(_names(sdf)), groups, nothing, nothing, nothing, ngroups, nothing,
-                          Threads.ReentrantLock())
+    gd = GroupedDataFrame(df, intcols, groups, nothing, nothing, nothing, ngroups, nothing)
 
     # sort groups if row_group_slots hasn't already done that
     if sort && !sorted
@@ -251,8 +247,6 @@ const F_ARGUMENT_RULES =
     If the first or last argument is a function `fun`, it is passed a [`SubDataFrame`](@ref)
     view for each group and can return any return value defined below.
     Note that this form is slower than `pair` or `args` due to type instability.
-
-    If `gd` has zero groups then no transformations are applied.
     """
 
 const KWARG_PROCESSING_RULES =
@@ -261,13 +255,9 @@ const KWARG_PROCESSING_RULES =
     in addition to those generated. In this case if the returned
     value contains columns with the same names as the grouping columns, they are
     required to be equal.
-    If `keepkeys=false` and some generated columns have the same name as grouping columns,
-    they are kept and are not required to be equal to grouping columns.
 
     If `ungroup=true` (the default) a `DataFrame` is returned.
     If `ungroup=false` a `GroupedDataFrame` grouped using `keycols(gdf)` is returned.
-
-    If `gd` has zero groups then no transformations are applied.
     """
 
 """
@@ -275,6 +265,8 @@ const KWARG_PROCESSING_RULES =
     combine(fun::Union{Function, Type}, gd::GroupedDataFrame;
             keepkeys::Bool=true, ungroup::Bool=true)
     combine(pair::Pair, gd::GroupedDataFrame; keepkeys::Bool=true, ungroup::Bool=true)
+    combine(fun::Union{Function, Type}, df::AbstractDataFrame, ungroup::Bool=true)
+    combine(pair::Pair, df::AbstractDataFrame, ungroup::Bool=true)
 
 Apply operations to each group in a [`GroupedDataFrame`](@ref) and return the combined
 result as a `DataFrame` if `ungroup=true` or `GroupedDataFrame` if `ungroup=false`.
@@ -464,16 +456,14 @@ function combine(p::Pair, gd::GroupedDataFrame;
 
     # verify if it is not better to use a fast path, which we achieve
     # by moving to combine(::GroupedDataFrame, ::AbstractVector) method
-    # note that even if length(gd) == 0 we can do this step
-    if isagg(p_from => (p_to isa Pair ? first(p_to) : p_to), gd) || p_from === nrow
+    if isagg(p_from => (p_to isa Pair ? first(p_to) : p_to)) || p_from === nrow
         return combine(gd, [p], keepkeys=keepkeys, ungroup=ungroup)
     end
 
     if p_from isa Tuple
         cs = collect(p_from)
-        # an explicit error is thrown as this was allowed in the past
-        throw(ArgumentError("passing a Tuple $p_from as column selector is not supported" *
-                            ", use a vector $cs instead"))
+        Base.depwarn("passing a Tuple $p_from as column selector is deprecated" *
+                     ", use a vector $cs instead", :combine)
     else
         cs = p_from
     end
@@ -491,6 +481,7 @@ function _combine_prepare(gd::GroupedDataFrame,
                           @nospecialize(cs::Union{Pair, typeof(nrow),
                                                   ColumnIndex, MultiColumnIndex}...);
                  keepkeys::Bool, ungroup::Bool, copycols::Bool, keeprows::Bool)
+    @assert !isempty(cs)
     cs_vec = []
     for p in cs
         if p === nrow
@@ -503,9 +494,8 @@ function _combine_prepare(gd::GroupedDataFrame,
     end
     if any(x -> x isa Pair && first(x) isa Tuple, cs_vec)
         x = cs_vec[findfirst(x -> first(x) isa Tuple, cs_vec)]
-        # an explicit error is thrown as this was allowed in the past
-        throw(ArgumentError("passing a Tuple $(first(x)) as column selector is not supported" *
-                            ", use a vector $(collect(first(x))) instead"))
+        Base.depwarn("passing a Tuple $(first(x)) as column selector is deprecated" *
+                     ", use a vector $(collect(first(x))) instead", :combine)
         for (i, v) in enumerate(cs_vec)
             if first(v) isa Tuple
                 cs_vec[i] = collect(first(v)) => last(v)
@@ -553,6 +543,7 @@ function _combine_prepare(gd::GroupedDataFrame,
                         else
                             push!(cs_norm, col_idx => identity => col_name)
                         end
+
                     end
                 end
             end
@@ -564,6 +555,17 @@ function _combine_prepare(gd::GroupedDataFrame,
     nms = Symbol[last(last(x)) for x in cs_norm]
     return combine_helper(f, gd, nms, keepkeys=keepkeys, ungroup=ungroup,
                           copycols=copycols, keeprows=keeprows)
+end
+
+function combine(gd::GroupedDataFrame; f...)
+    if length(f) == 0
+        throw(ArgumentError("combine(gd) is not allowed, use DataFrame(gd) " *
+                            "to combine a GroupedDataFrame into a DataFrame"))
+    end
+    Base.depwarn("`combine(gd; target_col = source_cols => fun, ...)` is deprecated" *
+                 ", use `combine(gd, source_cols => fun => :target_col, ...)` instead",
+                 :combine)
+    return combine(gd, [source_cols => fun => out_col for (out_col, (source_cols, fun)) in f])
 end
 
 function gen_groups(idx::Vector{Int})
@@ -587,48 +589,52 @@ function combine_helper(f, gd::GroupedDataFrame,
     if !ungroup && !keepkeys
         throw(ArgumentError("keepkeys=false when ungroup=false is not allowed"))
     end
-    idx, valscat = _combine(f, gd, nms, copycols, keeprows)
-    !keepkeys && ungroup && return valscat
-    keys = groupcols(gd)
-    for key in keys
-        if hasproperty(valscat, key)
-            if (keeprows && !isequal(valscat[!, key], parent(gd)[!, key])) ||
-                (!keeprows && !isequal(valscat[!, key], view(parent(gd)[!, key], idx)))
-                throw(ArgumentError("column :$key in returned data frame " *
-                                    "is not equal to grouping key :$key"))
+    if length(gd) > 0
+        idx, valscat = _combine(f, gd, nms, copycols, keeprows)
+        !keepkeys && ungroup && return valscat
+        keys = groupcols(gd)
+        for key in keys
+            if hasproperty(valscat, key)
+                if (keeprows && !isequal(valscat[!, key], parent(gd)[!, key])) ||
+                    (!keeprows && !isequal(valscat[!, key], view(parent(gd)[!, key], idx)))
+                    throw(ArgumentError("column :$key in returned data frame " *
+                                        "is not equal to grouping key :$key"))
+                end
             end
         end
-    end
-    if keeprows
-        newparent = select(parent(gd), gd.cols, copycols=copycols)
-    else
-        newparent = length(gd) > 0 ? parent(gd)[idx, gd.cols] : parent(gd)[1:0, gd.cols]
-    end
-    added_cols = select(valscat, Not(intersect(keys, _names(valscat))), copycols=false)
-    hcat!(newparent, length(gd) > 0 ? added_cols : similar(added_cols, 0), copycols=false)
-    ungroup && return newparent
+        if keeprows
+            newparent = select(parent(gd), gd.cols, copycols=copycols)
+        else
+            newparent = parent(gd)[idx, gd.cols]
+        end
+        hcat!(newparent, select(valscat, Not(intersect(keys, _names(valscat))), copycols=false),
+              copycols=false)
+        ungroup && return newparent
 
-    if length(idx) == 0 && !(keeprows && length(keys) > 0)
-        @assert nrow(newparent) == 0
-        return GroupedDataFrame(newparent, copy(gd.cols), Int[],
-                                Int[], Int[], Int[], 0, Dict{Any,Int}(),
-                                Threads.ReentrantLock())
-    elseif keeprows
-        @assert length(keys) > 0 || idx == gd.idx
-        # in this case we are sure that the result GroupedDataFrame has the
-        # same structure as the source except that grouping columns are at the start
-        return Threads.lock(gd.lazy_lock) do
-            return GroupedDataFrame(newparent, copy(gd.cols), gd.groups,
-                                    getfield(gd, :idx), getfield(gd, :starts),
-                                    getfield(gd, :ends), gd.ngroups,
-                                    getfield(gd, :keymap), Threads.ReentrantLock())
+        if length(idx) == 0
+            @assert nrow(newparent) == 0
+            return GroupedDataFrame(newparent, collect(1:length(gd.cols)), Int[],
+                                    Int[], Int[], Int[], 0, Dict{Any,Int}())
+        end
+        if keeprows
+            # in this case we are sure that the result GroupedDataFrame has the
+            # same structure as the source
+            # we do not copy data as it should be safe - we never mutate fields of gd
+            return GroupedDataFrame(newparent, gd.cols, gd.groups, gd.idx,
+                                    gd.starts, gd.ends, gd.ngroups, getfield(gd, :keymap))
+        else
+            groups = gen_groups(idx)
+            @assert groups[end] <= length(gd)
+            return GroupedDataFrame(newparent, collect(1:length(gd.cols)), groups,
+                                    nothing, nothing, nothing, groups[end], nothing)
         end
     else
-        groups = gen_groups(idx)
-        @assert groups[end] <= length(gd)
-        return GroupedDataFrame(newparent, copy(gd.cols), groups,
-                                nothing, nothing, nothing, groups[end], nothing,
-                                Threads.ReentrantLock())
+        if ungroup
+            return keepkeys ? parent(gd)[1:0, gd.cols] : DataFrame()
+        else
+            return GroupedDataFrame(parent(gd)[1:0, gd.cols], collect(1:length(gd.cols)),
+                                    Int[], Int[], Int[], Int[], 0, Dict{Any,Int}())
+        end
     end
 end
 
@@ -711,51 +717,48 @@ function do_call(f::Any, idx::AbstractVector{<:Integer},
                  starts::AbstractVector{<:Integer}, ends::AbstractVector{<:Integer},
                  gd::GroupedDataFrame, incols::Tuple{AbstractVector}, i::Integer)
     idx = idx[starts[i]:ends[i]]
-    return f(view(incols[1], idx))
+    f(view(incols[1], idx))
 end
 
 function do_call(f::Any, idx::AbstractVector{<:Integer},
                  starts::AbstractVector{<:Integer}, ends::AbstractVector{<:Integer},
                  gd::GroupedDataFrame, incols::NTuple{2, AbstractVector}, i::Integer)
     idx = idx[starts[i]:ends[i]]
-    return f(view(incols[1], idx), view(incols[2], idx))
+    f(view(incols[1], idx), view(incols[2], idx))
 end
 
 function do_call(f::Any, idx::AbstractVector{<:Integer},
                  starts::AbstractVector{<:Integer}, ends::AbstractVector{<:Integer},
                  gd::GroupedDataFrame, incols::NTuple{3, AbstractVector}, i::Integer)
     idx = idx[starts[i]:ends[i]]
-    return f(view(incols[1], idx), view(incols[2], idx), view(incols[3], idx))
+    f(view(incols[1], idx), view(incols[2], idx), view(incols[3], idx))
 end
 
 function do_call(f::Any, idx::AbstractVector{<:Integer},
                  starts::AbstractVector{<:Integer}, ends::AbstractVector{<:Integer},
                  gd::GroupedDataFrame, incols::NTuple{4, AbstractVector}, i::Integer)
     idx = idx[starts[i]:ends[i]]
-    return f(view(incols[1], idx), view(incols[2], idx), view(incols[3], idx),
-             view(incols[4], idx))
+    f(view(incols[1], idx), view(incols[2], idx), view(incols[3], idx),
+           view(incols[4], idx))
 end
 
 function do_call(f::Any, idx::AbstractVector{<:Integer},
                  starts::AbstractVector{<:Integer}, ends::AbstractVector{<:Integer},
                  gd::GroupedDataFrame, incols::Tuple, i::Integer)
     idx = idx[starts[i]:ends[i]]
-    return f(map(c -> view(c, idx), incols)...)
+    f(map(c -> view(c, idx), incols)...)
 end
 
 function do_call(f::Any, idx::AbstractVector{<:Integer},
                  starts::AbstractVector{<:Integer}, ends::AbstractVector{<:Integer},
                  gd::GroupedDataFrame, incols::NamedTuple, i::Integer)
     idx = idx[starts[i]:ends[i]]
-    return f(map(c -> view(c, idx), incols))
+    f(map(c -> view(c, idx), incols))
 end
 
-function do_call(f::Any, idx::AbstractVector{<:Integer},
-                 starts::AbstractVector{<:Integer}, ends::AbstractVector{<:Integer},
-                 gd::GroupedDataFrame, incols::Nothing, i::Integer)
-    idx = idx[starts[i]:ends[i]]
-    return f(view(parent(gd), idx, :))
-end
+do_call(f::Any, idx::AbstractVector{<:Integer},
+        starts::AbstractVector{<:Integer}, ends::AbstractVector{<:Integer},
+        gd::GroupedDataFrame, incols::Nothing, i::Integer) = f(gd[i])
 
 _nrow(df::AbstractDataFrame) = nrow(df)
 _nrow(x::NamedTuple{<:Any, <:Tuple{Vararg{AbstractVector}}}) =
@@ -773,35 +776,17 @@ struct Reduce{O, C, A} <: AbstractAggregate
 end
 Reduce(f, condf=nothing, adjust=nothing) = Reduce(f, condf, adjust, false)
 
-check_aggregate(f::Any, ::AbstractVector) = f
-check_aggregate(f::typeof(sum), ::AbstractVector{<:Union{Missing, Number}}) =
-    Reduce(Base.add_sum)
-check_aggregate(f::typeof(sum∘skipmissing), ::AbstractVector{<:Union{Missing, Number}}) =
-    Reduce(Base.add_sum, !ismissing)
-check_aggregate(f::typeof(prod), ::AbstractVector{<:Union{Missing, Number}}) =
-    Reduce(Base.mul_prod)
-check_aggregate(f::typeof(prod∘skipmissing), ::AbstractVector{<:Union{Missing, Number}}) =
-    Reduce(Base.mul_prod, !ismissing)
-check_aggregate(f::typeof(maximum),
-                ::AbstractVector{<:Union{Missing, MULTI_COLS_TYPE, AbstractVector}}) = f
-check_aggregate(f::typeof(maximum), v::AbstractVector{<:Union{Missing, Real}}) =
-    eltype(v) === Any ? f : Reduce(max)
-check_aggregate(f::typeof(maximum∘skipmissing),
-                ::AbstractVector{<:Union{Missing, MULTI_COLS_TYPE, AbstractVector}}) = f
-check_aggregate(f::typeof(maximum∘skipmissing), v::AbstractVector{<:Union{Missing, Real}}) =
-    eltype(v) === Any ? f : Reduce(max, !ismissing, nothing, true)
-check_aggregate(f::typeof(minimum),
-                ::AbstractVector{<:Union{Missing, MULTI_COLS_TYPE, AbstractVector}}) = f
-check_aggregate(f::typeof(minimum), v::AbstractVector{<:Union{Missing, Real}}) =
-    eltype(v) === Any ? f : Reduce(min)
-check_aggregate(f::typeof(minimum∘skipmissing),
-                ::AbstractVector{<:Union{Missing, MULTI_COLS_TYPE, AbstractVector}}) = f
-check_aggregate(f::typeof(minimum∘skipmissing), v::AbstractVector{<:Union{Missing, Real}}) =
-    eltype(v) === Any ? f : Reduce(min, !ismissing, nothing, true)
-check_aggregate(f::typeof(mean), ::AbstractVector{<:Union{Missing, Number}}) =
-    Reduce(Base.add_sum, nothing, /)
-check_aggregate(f::typeof(mean∘skipmissing), ::AbstractVector{<:Union{Missing, Number}}) =
-    Reduce(Base.add_sum, !ismissing, /)
+check_aggregate(f::Any) = f
+check_aggregate(::typeof(sum)) = Reduce(Base.add_sum)
+check_aggregate(::typeof(prod)) = Reduce(Base.mul_prod)
+check_aggregate(::typeof(maximum)) = Reduce(max)
+check_aggregate(::typeof(minimum)) = Reduce(min)
+check_aggregate(::typeof(mean)) = Reduce(Base.add_sum, nothing, /)
+check_aggregate(::typeof(sum∘skipmissing)) = Reduce(Base.add_sum, !ismissing)
+check_aggregate(::typeof(prod∘skipmissing)) = Reduce(Base.mul_prod, !ismissing)
+check_aggregate(::typeof(mean∘skipmissing)) = Reduce(Base.add_sum, !ismissing, /)
+check_aggregate(::typeof(maximum∘skipmissing)) = Reduce(max, !ismissing, nothing, true)
+check_aggregate(::typeof(minimum∘skipmissing)) = Reduce(min, !ismissing, nothing, true)
 
 # Other aggregate functions which are not strictly reductions
 struct Aggregate{F, C} <: AbstractAggregate
@@ -810,32 +795,15 @@ struct Aggregate{F, C} <: AbstractAggregate
 end
 Aggregate(f) = Aggregate(f, nothing)
 
-check_aggregate(f::typeof(var), ::AbstractVector{<:Union{Missing, Number}}) =
-    Aggregate(var)
-check_aggregate(f::typeof(var∘skipmissing), ::AbstractVector{<:Union{Missing, Number}}) =
-    Aggregate(var, !ismissing)
-check_aggregate(f::typeof(std), ::AbstractVector{<:Union{Missing, Number}}) =
-    Aggregate(std)
-check_aggregate(f::typeof(std∘skipmissing), ::AbstractVector{<:Union{Missing, Number}}) =
-    Aggregate(std, !ismissing)
-check_aggregate(f::typeof(first), v::AbstractVector) =
-    eltype(v) === Any ? f : Aggregate(first)
-check_aggregate(f::typeof(first),
-                ::AbstractVector{<:Union{Missing, MULTI_COLS_TYPE, AbstractVector}}) = f
-check_aggregate(f::typeof(first∘skipmissing), v::AbstractVector) =
-    eltype(v) === Any ? f : Aggregate(first, !ismissing)
-check_aggregate(f::typeof(first∘skipmissing),
-                ::AbstractVector{<:Union{Missing, MULTI_COLS_TYPE, AbstractVector}}) = f
-check_aggregate(f::typeof(last), v::AbstractVector) =
-    eltype(v) === Any ? f : Aggregate(last)
-check_aggregate(f::typeof(last),
-                ::AbstractVector{<:Union{Missing, MULTI_COLS_TYPE, AbstractVector}}) = f
-check_aggregate(f::typeof(last∘skipmissing), v::AbstractVector) =
-    eltype(v) === Any ? f : Aggregate(last, !ismissing)
-check_aggregate(f::typeof(last∘skipmissing),
-                ::AbstractVector{<:Union{Missing, MULTI_COLS_TYPE, AbstractVector}}) = f
-check_aggregate(f::typeof(length), ::AbstractVector) = Aggregate(length)
-
+check_aggregate(::typeof(var)) = Aggregate(var)
+check_aggregate(::typeof(var∘skipmissing)) = Aggregate(var, !ismissing)
+check_aggregate(::typeof(std)) = Aggregate(std)
+check_aggregate(::typeof(std∘skipmissing)) = Aggregate(std, !ismissing)
+check_aggregate(::typeof(first)) = Aggregate(first)
+check_aggregate(::typeof(first∘skipmissing)) = Aggregate(first, !ismissing)
+check_aggregate(::typeof(last)) = Aggregate(last)
+check_aggregate(::typeof(last∘skipmissing)) = Aggregate(last, !ismissing)
+check_aggregate(::typeof(length)) = Aggregate(length)
 # SkipMissing does not support length
 
 # Find first value matching condition for each group
@@ -912,11 +880,7 @@ function groupreduce_init(op, condf, adjust,
     if isconcretetype(Tnm) && applicable(initf, Tnm)
         tmpv = initf(Tnm)
         initv = op(tmpv, tmpv)
-        if adjust isa Nothing
-            x = Tnm <: AbstractIrrational ? float(initv) : initv
-        else
-            x = adjust(initv, 1)
-        end
+        x = adjust isa Nothing ? initv : adjust(initv, 1)
         if condf === !ismissing
             V = typeof(x)
         else
@@ -952,8 +916,7 @@ for (op, initf) in ((:max, :typemin), (:min, :typemax))
             # It is safe to use a non-missing init value
             # since missing will poison the result if present
             # we assume here that groups are non-empty (current design assures this)
-            # + workaround for https://github.com/JuliaLang/julia/issues/36978
-            if isconcretetype(S) && hasmethod($initf, Tuple{S}) && !(S <: Irrational)
+            if isconcretetype(S) && hasmethod($initf, Tuple{S})
                 fill!(outcol, $initf(S))
             else
                 fillfirst!(condf, outcol, incol, gd)
@@ -977,8 +940,8 @@ function copyto_widen!(res::AbstractVector{T}, x::AbstractVector) where T
     return res
 end
 
-function groupreduce!(res::AbstractVector, f, op, condf, adjust, checkempty::Bool,
-                      incol::AbstractVector{T}, gd::GroupedDataFrame) where {T}
+function groupreduce!(res::AbstractVector{U}, f, op, condf, adjust, checkempty::Bool,
+                      incol::AbstractVector{T}, gd::GroupedDataFrame) where {U,T}
     n = length(gd)
     if adjust !== nothing || checkempty
         counts = zeros(Int, n)
@@ -989,7 +952,7 @@ function groupreduce!(res::AbstractVector, f, op, condf, adjust, checkempty::Boo
         x = incol[i]
         if gix > 0 && (condf === nothing || condf(x))
             # this check should be optimized out if U is not Any
-            if eltype(res) === Any && !isassigned(res, gix)
+            if U === Any && !isassigned(res, gix)
                 res[gix] = f(x, gix)
             else
                 res[gix] = op(res[gix], f(x, gix))
@@ -1000,7 +963,7 @@ function groupreduce!(res::AbstractVector, f, op, condf, adjust, checkempty::Boo
         end
     end
     # handle the case of an unitialized reduction
-    if eltype(res) === Any
+    if U === Any
         if op === Base.add_sum
             initf = zero
         elseif op === Base.mul_prod
@@ -1047,12 +1010,6 @@ groupreduce(f, op, condf::typeof(!ismissing), adjust, checkempty::Bool,
 (r::Reduce)(incol::AbstractVector, gd::GroupedDataFrame) =
     groupreduce((x, i) -> x, r.op, r.condf, r.adjust, r.checkempty, incol, gd)
 
-# this definition is missing in Julia 1.0 LTS and is required by aggregation for var
-# TODO: remove this when we drop 1.0 support
-if VERSION < v"1.1"
-    Base.zero(::Type{Missing}) = missing
-end
-
 function (agg::Aggregate{typeof(var)})(incol::AbstractVector, gd::GroupedDataFrame)
     means = groupreduce((x, i) -> x, Base.add_sum, agg.condf, /, false, incol, gd)
     # !ismissing check is purely an optimization to avoid a copy later
@@ -1062,18 +1019,14 @@ function (agg::Aggregate{typeof(var)})(incol::AbstractVector, gd::GroupedDataFra
         T = real(eltype(means))
     end
     res = zeros(T, length(gd))
-    return groupreduce!(res, (x, i) -> @inbounds(abs2(x - means[i])), +, agg.condf,
-                        (x, l) -> l <= 1 ? oftype(x / (l-1), NaN) : x / (l-1),
-                        false, incol, gd)
+    groupreduce!(res, (x, i) -> @inbounds(abs2(x - means[i])), +, agg.condf,
+                 (x, l) -> l <= 1 ? oftype(x / (l-1), NaN) : x / (l-1),
+                 false, incol, gd)
 end
 
 function (agg::Aggregate{typeof(std)})(incol::AbstractVector, gd::GroupedDataFrame)
     outcol = Aggregate(var, agg.condf)(incol, gd)
-    if eltype(outcol) <: Union{Missing, Rational}
-        return sqrt.(outcol)
-    else
-        return map!(sqrt, outcol, outcol)
-    end
+    map!(sqrt, outcol, outcol)
 end
 
 for f in (first, last)
@@ -1101,8 +1054,10 @@ function (agg::Aggregate{typeof(length)})(incol::AbstractVector, gd::GroupedData
     end
 end
 
-isagg((col, fun)::Pair, gdf::GroupedDataFrame) =
-    col isa ColumnIndex && check_aggregate(fun, parent(gdf)[!, col]) isa AbstractAggregate
+isagg(p::Pair) =
+    check_aggregate(last(p)) isa AbstractAggregate && first(p) isa ColumnIndex
+
+const MULTI_COLS_TYPE = Union{AbstractDataFrame, NamedTuple, DataFrameRow, AbstractMatrix}
 
 function _agg2idx_map_helper(idx, idx_agg)
     agg2idx_map = fill(-1, length(idx))
@@ -1141,17 +1096,8 @@ function _combine(f::AbstractVector{<:Pair},
     @assert all(x -> first(x) isa Union{Int, AbstractVector{Int}, AsTable}, f)
     @assert all(x -> last(x) isa Base.Callable, f)
 
-    if isempty(f)
-        if keeprows && nrow(parent(gd)) > 0 && minimum(gd.groups) == 0
-            throw(ArgumentError("select and transform do not support " *
-                                "`GroupedDataFrame`s from which some groups have "*
-                                "been dropped (including skipmissing=true)"))
-        end
-        return Int[], DataFrame()
-    end
-
     if keeprows
-        if nrow(parent(gd)) > 0 && minimum(gd.groups) == 0
+        if minimum(gd.groups) == 0
             throw(ArgumentError("select and transform do not support " *
                                 "`GroupedDataFrame`s from which some groups have "*
                                 "been dropped (including skipmissing=true)"))
@@ -1162,11 +1108,11 @@ function _combine(f::AbstractVector{<:Pair},
     end
 
     idx_agg = nothing
-    if length(gd) > 0 && any(x -> isagg(x, gd), f)
+    if any(isagg, f)
         # Compute indices of representative rows only once for all AbstractAggregates
         idx_agg = Vector{Int}(undef, length(gd))
         fillfirst!(nothing, idx_agg, 1:length(gd.groups), gd)
-    elseif length(gd) == 0 || !all(x -> isagg(x, gd), f)
+    elseif !all(isagg, f)
         # Trigger computation of indices
         # This can speed up some aggregates that would not trigger this on their own
         @assert gd.idx !== nothing
@@ -1175,9 +1121,9 @@ function _combine(f::AbstractVector{<:Pair},
     parentdf = parent(gd)
     for (i, p) in enumerate(f)
         source_cols, fun = p
-        if length(gd) > 0 && isagg(p, gd)
+        if isagg(p)
             incol = parentdf[!, source_cols]
-            agg = check_aggregate(last(p), incol)
+            agg = check_aggregate(last(p))
             outcol = agg(incol, gd)
             res[i] = idx_agg, outcol
         elseif keeprows && fun === identity && !(source_cols isa AsTable)
@@ -1196,9 +1142,7 @@ function _combine(f::AbstractVector{<:Pair},
                 @assert source_cols isa AbstractVector{Int}
                 incols = ntuple(i -> parentdf[!, source_cols[i]], length(source_cols))
             end
-            firstres = length(gd) > 0 ?
-                       do_call(fun, gd.idx, gd.starts, gd.ends, gd, incols, 1) :
-                       do_call(fun, Int[], 1:1, 0:0, gd, incols, 1)
+            firstres = do_call(fun, gd.idx, gd.starts, gd.ends, gd, incols, 1)
             firstmulticol = firstres isa MULTI_COLS_TYPE
             if firstmulticol
                 throw(ArgumentError("a single value or vector result is required when " *
@@ -1272,14 +1216,13 @@ function _combine(f::AbstractVector{<:Pair},
     # this check is redundant given we check idx above
     # but it is safer to double check and it is cheap
     @assert all(x -> length(x) == length(outcols[1]), outcols)
-    return idx, DataFrame(collect(AbstractVector, outcols), nms, copycols=false)
+    return idx, DataFrame!(collect(AbstractVector, outcols), nms)
 end
 
 function _combine(fun::Base.Callable, gd::GroupedDataFrame, ::Nothing,
                   copycols::Bool, keeprows::Bool)
     @assert copycols && !keeprows
-    # use `similar` as `gd` might have been subsetted
-    firstres = length(gd) > 0 ? fun(gd[1]) : fun(similar(parent(gd), 0))
+    firstres = fun(gd[1])
     idx, outcols, nms = _combine_multicol(firstres, fun, gd, nothing)
     valscat = DataFrame(collect(AbstractVector, outcols), nms)
     return idx, valscat
@@ -1302,9 +1245,7 @@ function _combine(p::Pair, gd::GroupedDataFrame, ::Nothing,
         @assert source_cols isa AbstractVector{Int}
         incols = ntuple(i -> parent(gd)[!, source_cols[i]], length(source_cols))
     end
-    firstres = length(gd) > 0 ?
-               do_call(fun, gd.idx, gd.starts, gd.ends, gd, incols, 1) :
-               do_call(fun, Int[], 1:1, 0:0, gd, incols, 1)
+    firstres = do_call(fun, gd.idx, gd.starts, gd.ends, gd, incols, 1)
     idx, outcols, nms = _combine_multicol(firstres, fun, gd, incols)
     # disallow passing target column name to genuine tables
     if firstres isa MULTI_COLS_TYPE
@@ -1377,7 +1318,7 @@ function _combine_with_first(first::Union{NamedTuple, DataFrameRow, AbstractData
                                                            f, gd, incols, targetcolnames,
                                                            firstmulticol)
     end
-    return idx, outcols, collect(Symbol, finalcolnames)
+    idx, outcols, collect(Symbol, finalcolnames)
 end
 
 function fill_row!(row, outcols::NTuple{N, AbstractVector},
@@ -1419,10 +1360,6 @@ function _combine_rows_with_first!(first::Union{NamedTuple, DataFrameRow},
     gdidx = gd.idx
     starts = gd.starts
     ends = gd.ends
-
-    # handle empty GroupedDataFrame
-    len == 0 && return outcols, colnames
-
     # Handle first group
     j = fill_row!(first, outcols, rowstart, colstart, colnames)
     @assert j === nothing # eltype is guaranteed to match
@@ -1508,7 +1445,7 @@ function _combine_tables_with_first!(first::Union{AbstractDataFrame,
     # Handle first group
 
     @assert _ncol(first) == N
-    if !isempty(colnames) && length(gd) > 0
+    if !isempty(colnames)
         j = append_rows!(first, outcols, colstart, colnames)
         @assert j === nothing # eltype is guaranteed to match
         append!(idx, Iterators.repeated(gdidx[starts[rowstart]], _nrow(first)))
@@ -1555,16 +1492,11 @@ end
     select(gd::GroupedDataFrame, args...;
            copycols::Bool=true, keepkeys::Bool=true, ungroup::Bool=true)
 
-Apply `args` to `gd` following the rules described in [`combine`](@ref).
+Apply `args` to `gd` following the rules described in [`combine`](@ref) and return the
+result as a `DataFrame` if `ungroup=true` or `GroupedDataFrame` if `ungroup=false`.
 
-If `ungroup=true` the result is a `DataFrame`.
-If  `ungroup=false` the result is a `GroupedDataFrame`
-(in this case the returned value retains the order of groups of `gd`).
-
-The `parent` of the returned value has as many rows as `parent(gd)` and
-in the same order, except when the returned value has no columns
-(in which case it has zero rows). If an operation in `args` returns
-a single value it is always broadcasted to have this number of rows.
+The `parent` of the returned value has as many rows as `parent(gd)`. If an operation
+in `args` returns a single value it is always broadcasted to have this number of rows.
 
 If `copycols=false` then do not perform copying of columns that are not transformed.
 
@@ -1711,21 +1643,15 @@ select(gd::GroupedDataFrame, args...;
 
 An equivalent of
 `select(gd, :, args..., copycols=copycols, keepkeys=keepkeys, ungroup=ungroup)`
-but keeps the columns of `parent(gd)` in their original order.
 
 # See also
 
 [`groupby`](@ref), [`combine`](@ref), [`select`](@ref), [`select!`](@ref), [`transform!`](@ref)
 """
-function transform(gd::GroupedDataFrame, args...;
-                   copycols::Bool=true, keepkeys::Bool=true, ungroup::Bool=true)
-    res = select(gd, :, args..., copycols=copycols, keepkeys=keepkeys,
-                 ungroup=ungroup)
-    # res can be a GroupedDataFrame based on DataFrame or a DataFrame,
-    # so parent always gives a data frame
-    select!(parent(res), propertynames(parent(gd)), :)
-    return res
-end
+transform(gd::GroupedDataFrame, args...;
+          copycols::Bool=true, keepkeys::Bool=true, ungroup::Bool=true) =
+    select(gd, :, args..., copycols=copycols, keepkeys=keepkeys,
+           ungroup=ungroup)
 
 """
     select!(gd::GroupedDataFrame{DataFrame}, args...; ungroup::Bool=true)
@@ -1733,10 +1659,6 @@ end
 An equivalent of
 `select(gd, args..., copycols=false, keepkeys=true, ungroup=ungroup)`
 but updates `parent(gd)` in place.
-
-`gd` is updated to reflect the new rows of its updated parent.
-If there are independent `GroupedDataFrame` objects constructed
-using the same parent data frame they might get corrupt.
 
 # See also
 
@@ -1754,17 +1676,12 @@ end
 
 An equivalent of
 `transform(gd, args..., copycols=false, keepkeys=true, ungroup=ungroup)`
-but updates `parent(gd)` in place
-and keeps the columns of `parent(gd)` in their original order.
+but updates `parent(gd)` in place.
+
 
 # See also
 
 [`groupby`](@ref), [`combine`](@ref), [`select`](@ref), [`select!`](@ref), [`transform`](@ref)
 """
-function transform!(gd::GroupedDataFrame{DataFrame}, args...; ungroup::Bool=true)
-    newdf = select(gd, :, args..., copycols=false)
-    df = parent(gd)
-    select!(newdf, propertynames(df), :)
-    _replace_columns!(df, newdf)
-    return ungroup ? df : gd
-end
+transform!(gd::GroupedDataFrame{DataFrame}, args...; ungroup::Bool=true) =
+    select!(gd, :, args..., ungroup=ungroup)

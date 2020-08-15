@@ -1,17 +1,3 @@
-# Implementation note
-# There are two important design features of GroupedDataFrame
-# 1. idx, starts, ends and keymap are by default left uninitialized;
-#    they get populated only on demand; this means that every GroupedDataFrame
-#    has lazy_lock field which is used to make sure that two threads concurrently
-#    do not try to create them. The lock should be used in every function that
-#    does a direct access to these fields via getfield.
-# 2. Except for point 1 above currently fields of GroupedDataFrame are never
-#    mutated after it is created. This means that internally when copying
-#    a GroupedDataFrame they are not copied for efficiency. If in the future
-#    operations that mutate GroupedDataFrame are introduced all non-copying
-#    passing of the internal fields to a new GroupedDataFrame should be
-#    updated. Currently this applies to `getindex` and `combine_helper` functions
-
 """
     GroupedDataFrame
 
@@ -22,15 +8,13 @@ Not meant to be constructed directly, see `groupby`.
 """
 mutable struct GroupedDataFrame{T<:AbstractDataFrame}
     parent::T
-    cols::Vector{Symbol}                 # column names used for grouping
+    cols::Vector{Int}                    # columns used for grouping
     groups::Vector{Int}                  # group indices for each row in 0:ngroups, 0 skipped
     idx::Union{Vector{Int},Nothing}      # indexing vector sorting rows into groups
     starts::Union{Vector{Int},Nothing}   # starts of groups after permutation by idx
     ends::Union{Vector{Int},Nothing}     # ends of groups after permutation by idx
     ngroups::Int                         # number of groups
     keymap::Union{Dict{Any,Int},Nothing} # mapping of key tuples to group indices
-    lazy_lock::Threads.ReentrantLock     # lock is needed to make lazy operations
-                                         # thread safe
 end
 
 function genkeymap(gd, cols)
@@ -50,23 +34,14 @@ end
 function Base.getproperty(gd::GroupedDataFrame, f::Symbol)
     if f in (:idx, :starts, :ends)
         # Group indices are computed lazily the first time they are accessed
-        # Do not lock when field is already initialized
         if getfield(gd, f) === nothing
-            Threads.lock(gd.lazy_lock) do
-                if getfield(gd, f) === nothing # Do not lock when field is already initialized
-                    gd.idx, gd.starts, gd.ends = compute_indices(gd.groups, gd.ngroups)
-                end
-            end
+            gd.idx, gd.starts, gd.ends = compute_indices(gd.groups, gd.ngroups)
         end
         return getfield(gd, f)::Vector{Int}
     elseif f === :keymap
         # Keymap is computed lazily the first time it is accessed
-        if getfield(gd, f) === nothing # Do not lock when field is already initialized
-            Threads.lock(gd.lazy_lock) do
-                if getfield(gd, f) === nothing
-                    gd.keymap = genkeymap(gd, ntuple(i -> parent(gd)[!, gd.cols[i]], length(gd.cols)))
-                end
-            end
+        if getfield(gd, f) === nothing
+            gd.keymap = genkeymap(gd, ntuple(i -> parent(gd)[!, gd.cols[i]], length(gd.cols)))
         end
         return getfield(gd, f)::Dict{Any,Int}
     else
@@ -144,27 +119,19 @@ groupindices(gd::GroupedDataFrame) = replace(gd.groups, 0=>missing)
 
 Return a vector of `Symbol` column names in `parent(gd)` used for grouping.
 """
-function groupcols(gd::GroupedDataFrame)
-    issubset(gd.cols, _names(parent(gd))) ||
-        throw(ErrorException("grouping column names not found in data frame column names"))
-    return copy(gd.cols)
-end
+groupcols(gd::GroupedDataFrame) = _names(gd)[gd.cols]
 
 """
     valuecols(gd::GroupedDataFrame)
 
 Return a vector of `Symbol` column names in `parent(gd)` not used for grouping.
 """
-function valuecols(gd::GroupedDataFrame)
-    issubset(gd.cols, _names(parent(gd))) || throw(ErrorException("grouping column " *
-        "names not found in data frame column names"))
-    return setdiff(_names(gd), gd.cols)
-end
+valuecols(gd::GroupedDataFrame) = _names(gd)[Not(gd.cols)]
 
 
 # Get grouping variable index by its name
 function _groupvar_idx(gd::GroupedDataFrame, name::Symbol, strict::Bool)
-    i = findfirst(==(name), gd.cols)
+    i = findfirst(==(name), groupcols(gd))
     i === nothing && strict && throw(ArgumentError("$name is not a grouping column"))
     return i
 end
@@ -222,18 +189,15 @@ function Base.getindex(gd::GroupedDataFrame, idxs::AbstractVector{<:Integer})
             new_groups[idx[j]] = i
         end
     end
-    GroupedDataFrame(gd.parent, copy(gd.cols), new_groups, gd.idx,
-                     new_starts, new_ends, length(new_starts), nothing,
-                     Threads.ReentrantLock())
+    GroupedDataFrame(gd.parent, gd.cols, new_groups, gd.idx,
+                     new_starts, new_ends, length(new_starts), nothing)
 end
 
 # Index with colon (creates copy)
 Base.getindex(gd::GroupedDataFrame, idxs::Colon) =
-    Threads.lock(gd.lazy_lock) do
-        return GroupedDataFrame(gd.parent, copy(gd.cols), gd.groups, getfield(gd, :idx),
-                                getfield(gd, :starts), getfield(gd, :ends), gd.ngroups,
-                                getfield(gd, :keymap), Threads.ReentrantLock())
-    end
+    GroupedDataFrame(gd.parent, gd.cols, gd.groups, getfield(gd, :idx),
+                     getfield(gd, :starts), getfield(gd, :ends), gd.ngroups,
+                     getfield(gd, :keymap))
 
 
 #
@@ -251,10 +215,6 @@ equivalent `Tuple`, `NamedTuple`, or `Dict`.
 Instances of this type are returned by `keys(::GroupedDataFrame)` and are not
 meant to be constructed directly.
 
-Indexing fields of `GroupKey` is allowed using an integer, a `Symbol`, or a string.
-It is also possible to access the data in a `GroupKey` using the `getproperty`
-function. A `GroupKey` can be converted to a `Tuple`, `NamedTuple`, or `Vector`.
-
 See [`keys(::GroupedDataFrame)`](@ref) for more information.
 """
 struct GroupKey{T<:GroupedDataFrame}
@@ -269,15 +229,14 @@ end
 
 Base.parent(key::GroupKey) = getfield(key, :parent)
 Base.length(key::GroupKey) = length(parent(key).cols)
-Base.names(key::GroupKey) = string.(parent(key).cols)
+Base.names(key::GroupKey) = string.(groupcols(parent(key)))
 # Private fields are never exposed since they can conflict with column names
-Base.propertynames(key::GroupKey, private::Bool=false) = copy(parent(key).cols)
+Base.propertynames(key::GroupKey, private::Bool=false) = groupcols(parent(key))
 Base.keys(key::GroupKey) = propertynames(key)
-Base.haskey(key::GroupKey, idx::Symbol) = idx in parent(key).cols
+Base.haskey(key::GroupKey, idx::Symbol) = idx in groupcols(parent(key))
 Base.haskey(key::GroupKey, idx::AbstractString) = haskey(key, Symbol(idx))
 Base.haskey(key::GroupKey, idx::Union{Signed,Unsigned}) = 1 <= idx <= length(key)
 Base.values(key::GroupKey) = Tuple(_groupvalues(parent(key), getfield(key, :idx)))
-Base.IteratorEltype(::Type{<:GroupKey}) = Base.EltypeUnknown()
 Base.iterate(key::GroupKey, i::Integer=1) =
     i <= length(key) ? (key[i], i + 1) : nothing
 Base.getindex(key::GroupKey, i::Integer) =
@@ -304,32 +263,11 @@ end
 Base.getproperty(key::GroupKey, p::AbstractString) = getproperty(key, Symbol(p))
 
 function Base.NamedTuple(key::GroupKey)
-    N = NamedTuple{Tuple(parent(key).cols)}
+    N = NamedTuple{Tuple(groupcols(parent(key)))}
     N(_groupvalues(parent(key), getfield(key, :idx)))
 end
-
-"""
-    copy(key::GroupKey)
-
-Construct a `NamedTuple` with the same contents as the [`GroupKey`](@ref).
-"""
-Base.copy(key::GroupKey) = NamedTuple(key)
-
-Base.convert(::Type{NamedTuple}, key::GroupKey) = NamedTuple(key)
-Base.convert(::Type{Tuple}, key::GroupKey) = Tuple(key)
-
-Base.convert(::Type{Vector}, key::GroupKey) = [v for v in key]
-Base.convert(::Type{Vector{T}}, key::GroupKey) where T = T[v for v in key]
-Base.Vector(key::GroupKey) = convert(Vector, key)
-Base.Vector{T}(key::GroupKey) where T = convert(Vector{T}, key)
-
-Base.convert(::Type{Array}, key::GroupKey) = Vector(key)
-Base.convert(::Type{Array{T}}, key::GroupKey) where {T} = Vector{T}(key)
-Base.Array(key::GroupKey) = Vector(key)
-Base.Array{T}(key::GroupKey) where {T} = Vector{T}(key)
-
-Base.broadcastable(::GroupKey) =
-    throw(ArgumentError("broadcasting over `GroupKey`s is reserved"))
+Base.Tuple(key::GroupKey) = values(key)
+Base.Dict(key::GroupKey) = Dict(String(first(ki)) => last(ki) for ki in pairs(key))
 
 """
     GroupKeys{T<:GroupedDataFrame} <: AbstractVector{GroupKey{T}}
@@ -361,13 +299,11 @@ end
 # The full version (to_indices) is required rather than to_index even though
 # GroupedDataFrame behaves as a 1D array due to the behavior of Colon and Not.
 # Note that this behavior would be the default if it was <:AbstractArray
-function Base.getindex(gd::GroupedDataFrame, idx...)
-    length(idx) == 1 || throw(ArgumentError("GroupedDataFrame requires a single index"))
-    return getindex(gd, Base.to_indices(gd, idx)...)
-end
+Base.getindex(gd::GroupedDataFrame, idx...) =
+    getindex(gd, Base.to_indices(gd, idx)...)
 
 # The allowed key types for dictionary-like indexing
-const GroupKeyTypes = Union{GroupKey, Tuple, NamedTuple}
+const GroupKeyTypes = Union{GroupKey, Tuple, NamedTuple, AbstractDict{Symbol}, AbstractDict{<:AbstractString}}
 # All allowed scalar index types
 const GroupIndexTypes = Union{Integer, GroupKeyTypes}
 
@@ -381,26 +317,26 @@ end
 Base.to_index(gd::GroupedDataFrame, key::Tuple) = gd.keymap[key]
 
 function Base.to_index(gd::GroupedDataFrame, key::NamedTuple{N}) where {N}
-    if length(key) != length(gd.cols) || any(n != c for (n, c) in zip(N, gd.cols))
+    if length(key) != length(gd.cols) || any(n != _names(gd)[c] for (n, c) in zip(N, gd.cols))
         throw(KeyError(key))
     end
     return Base.to_index(gd, Tuple(key))
 end
 
-function _dict_to_tuple(key::Union{Dict{Symbol},Dict{<:AbstractString}} , gd)
-    T = keytype(d)
+function _dict_to_tuple(key::Union{AbstractDict{Symbol}, AbstractDict{<:AbstractString}}, gd)
+    if length(key) != length(gd.cols)
+        throw(KeyError(key))
+    end
+
+    T = keytype(key) <: Symbol ? Symbol : String
     t = ntuple(length(gd.cols)) do i 
         key[T(_names(gd)[gd.cols[i]])]
     end
 end
 
-function Base.to_index(gd::GroupedDataFrame, key::Union{Dict{Symbol},Dict{<:AbstractString}})
-    if length(key) != length(gd.cols)
-        throw(KeyError(key))
-    end
-    t = _dict_to_tuple(key, gd)
-    return Base.to_index(gd, t)
-end
+Base.to_index(gd::GroupedDataFrame, key::Union{AbstractDict{Symbol},AbstractDict{<:AbstractString}}) =
+    Base.to_index(gd, _dict_to_tuple(key, gd))
+
 
 # Array of (possibly non-standard) indices
 function Base.to_index(gd::GroupedDataFrame, idxs::AbstractVector{T}) where {T}
@@ -424,6 +360,10 @@ function Base.to_index(gd::GroupedDataFrame, idxs::AbstractVector{T}) where {T}
         Tuple
     elseif E1 <: NamedTuple
         NamedTuple
+    elseif E1 <: AbstractDict{Symbol}
+        AbstractDict{Symbol}
+    elseif E1 <: AbstractDict{<:AbstractString}
+        AbstractDict{<:AbstractString}
     else
         throw(ArgumentError("Invalid index: $idx1 of type $E1"))
     end
@@ -580,20 +520,15 @@ function Base.haskey(gd::GroupedDataFrame, key::Tuple)
 end
 
 function Base.haskey(gd::GroupedDataFrame, key::NamedTuple{N}) where {N}
-    if length(key) != length(gd.cols) || any(((n, c),) -> n != c, zip(N, gd.cols))
+    if any(n != _names(gd)[c] for (n, c) in zip(N, gd.cols))
         return throw(ArgumentError("The column names of key do not match " *
                                    "the names of grouping columns"))
     end
     return haskey(gd, Tuple(key))
 end
 
-function Base.haskey(gd::GroupedDataFrame, key::Dict{T, S}) where {T<:Union{Symbol, <:AbstractString}, S}
-    if length(key) != length(gd.cols) || any(Symbol(n) ∉ _names(gd) for n in keys(key))
-        return throw(ArgumentError("The keys of the `Dict` key do not match " *
-                                   "the names of grouping columns"))
-    end
-    return haskey(gd, _dict_to_tuple(key, gd))
-end
+Base.haskey(gd::GroupedDataFrame, key::Union{AbstractDict{Symbol},AbstractDict{<:AbstractString}}) = 
+    haskey(gd, _dict_to_tuple(key, gd))
 
 Base.haskey(gd::GroupedDataFrame, key::Union{Signed,Unsigned}) =
     1 <= key <= length(gd)
@@ -604,8 +539,8 @@ Base.haskey(gd::GroupedDataFrame, key::Union{Signed,Unsigned}) =
 Get a group based on the values of the grouping columns.
 
 `key` may be a `NamedTuple` or `Tuple` of grouping column values (in the same
-order as the `cols` argument to `groupby`). It may also be a `Dict`, in which case the 
-order of the arguments does not matter. 
+order as the `cols` argument to `groupby`). It may also be a `Dict` with
+`Symbol` or string keys, in which case the order of the arguments does not matter. 
 
 # Examples
 
@@ -649,109 +584,10 @@ julia> get(gd, (:baz,), nothing)
 julia> get(gd, (:qux,), nothing)
 ```
 """
-function Base.get(gd::GroupedDataFrame, key::Union{Tuple, NamedTuple, Dict}, default)
+function Base.get(gd::GroupedDataFrame, key::GroupKeyTypes, default)
     try
         return gd[key]
     catch KeyError
         return default
     end
-end
-
-"""
-    filter(fun, gdf::GroupedDataFrame)
-    filter(cols => fun, gdf::GroupedDataFrame)
-
-Return a new `GroupedDataFrame` containing only groups for which `fun`
-returns `true`.
-
-If `cols` is not specified then the predicate `fun` is called with a
-`SubDataFrame` for each group.
-
-If `cols` is specified then the predicate `fun` is called for each group with
-views of the corresponding columns as separate positional arguments, unless
-`cols` is an `AsTable` selector, in which case a `NamedTuple` of these arguments
-is passed. `cols` can be any column selector ($COLUMNINDEX_STR;
-$MULTICOLUMNINDEX_STR), and column duplicates are allowed if a vector of
-`Symbol`s, strings, or integers is passed.
-
-# Examples
-```
-julia> df = DataFrame(g=[1, 2], x=['a', 'b']);
-
-julia> gd = groupby(df, :g)
-GroupedDataFrame with 2 groups based on key: g
-First Group (1 row): g = 1
-│ Row │ g     │ x    │
-│     │ Int64 │ Char │
-├─────┼───────┼──────┤
-│ 1   │ 1     │ 'a'  │
-⋮
-Last Group (1 row): g = 2
-│ Row │ g     │ x    │
-│     │ Int64 │ Char │
-├─────┼───────┼──────┤
-│ 1   │ 2     │ 'b'  │
-
-julia> filter(x -> x.x[1] == 'a', gd)
-GroupedDataFrame with 1 group based on key: g
-First Group (1 row): g = 1
-│ Row │ g     │ x    │
-│     │ Int64 │ Char │
-├─────┼───────┼──────┤
-│ 1   │ 1     │ 'a'  │
-
-julia> filter(:x => x -> x[1] == 'a', gd)
-GroupedDataFrame with 1 group based on key: g
-First Group (1 row): g = 1
-│ Row │ g     │ x    │
-│     │ Int64 │ Char │
-├─────┼───────┼──────┤
-│ 1   │ 1     │ 'a'  │
-
-```
-"""
-Base.filter(f, gdf::GroupedDataFrame) =
-    gdf[[f(sdf)::Bool for sdf in gdf]]
-Base.filter((col, f)::Pair{<:ColumnIndex}, gdf::GroupedDataFrame) =
-    _filter_helper(gdf, f, gdf.idx, gdf.starts, gdf.ends, parent(gdf)[!, col])
-Base.filter((cols, f)::Pair{<:AbstractVector{Symbol}}, gdf::GroupedDataFrame) =
-    filter([index(parent(gdf))[col] for col in cols] => f, gdf)
-Base.filter((cols, f)::Pair{<:AbstractVector{<:AbstractString}}, gdf::GroupedDataFrame) =
-    filter([index(parent(gdf))[col] for col in cols] => f, gdf)
-Base.filter((cols, f)::Pair, gdf::GroupedDataFrame) =
-    filter(index(parent(gdf))[cols] => f, gdf)
-Base.filter((cols, f)::Pair{<:AbstractVector{Int}}, gdf::GroupedDataFrame) =
-    _filter_helper(gdf, f, gdf.idx, gdf.starts, gdf.ends, (parent(gdf)[!, i] for i in cols)...)
-
-function _filter_helper(gdf::GroupedDataFrame, f, idx::Vector{Int},
-                        starts::Vector{Int}, ends::Vector{Int}, cols...)
-    function mapper(i::Integer)
-        idxs = idx[starts[i]:ends[i]]
-        return map(x -> view(x, idxs), cols)
-    end
-
-    if length(cols) == 0
-        throw(ArgumentError("At least one column must be passed to filter on"))
-    end
-    sel = [f(mapper(i)...)::Bool for i in 1:length(gdf)]
-    return gdf[sel]
-end
-
-function Base.filter((cols, f)::Pair{<:AsTable}, gdf::GroupedDataFrame)
-    df_tmp = select(parent(gdf), cols.cols, copycols=false)
-    if ncol(df_tmp) == 0
-        throw(ArgumentError("At least one column must be passed to filter on"))
-    end
-    return _filter_helper_astable(gdf, Tables.columntable(df_tmp), f,
-                                      gdf.idx, gdf.starts, gdf.ends)
-end
-
-function _filter_helper_astable(gdf::GroupedDataFrame, nt::NamedTuple, f,
-                                idx::Vector{Int}, starts::Vector{Int}, ends::Vector{Int})
-    function mapper(i::Integer)
-        idxs = idx[starts[i]:ends[i]]
-        return map(x -> view(x, idxs), nt)
-    end
-
-    return gdf[[f(mapper(i))::Bool for i in 1:length(gdf)]]
 end

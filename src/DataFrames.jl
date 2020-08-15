@@ -1,5 +1,8 @@
 module DataFrames
 
+nothing
+println("hello")
+
 using Statistics, Printf, REPL
 using Reexport, SortingAlgorithms, Compat, Unicode, PooledArrays
 @reexport using CategoricalArrays, Missings, InvertedIndices
@@ -20,6 +23,7 @@ export AbstractDataFrame,
        Between,
        ByRow,
        DataFrame,
+       DataFrame!,
        DataFrameRow,
        GroupedDataFrame,
        SubDataFrame,
@@ -63,9 +67,6 @@ export AbstractDataFrame,
        unique!,
        unstack,
        valuecols
-
-# TODO: remove these exports in year 2021
-export by, aggregate
 
 if VERSION >= v"1.1.0-DEV.792"
     import Base.eachcol, Base.eachrow

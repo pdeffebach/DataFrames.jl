@@ -2,7 +2,7 @@ function Base.summary(io::IO, gd::GroupedDataFrame)
     N = length(gd)
     keystr = length(gd.cols) > 1 ? "keys" : "key"
     groupstr = N == 1 ? "group" : "groups"
-    print(io, "$(nameof(typeof(gd))) with $N $groupstr based on $keystr: ")
+    print(io, "$(typeof(gd).name) with $N $groupstr based on $keystr: ")
     join(io, groupcols(gd), ", ")
 end
 
@@ -14,6 +14,7 @@ function Base.show(io::IO, gd::GroupedDataFrame;
                    rowlabel::Symbol = :Row,
                    summary::Bool = true)
     N = length(gd)
+    parent_names = _names(gd.parent)
 
     summary && Base.summary(io, gd)
 
@@ -22,7 +23,7 @@ function Base.show(io::IO, gd::GroupedDataFrame;
             nrows = size(gd[i], 1)
             rows = nrows > 1 ? "rows" : "row"
 
-            identified_groups = [string(col, " = ", repr(gd[i][1, col]))
+            identified_groups = [string(parent_names[col], " = ", repr(gd[i][1, col]))
                                  for col in gd.cols]
 
             print(io, "\nGroup $i ($nrows $rows): ")
@@ -36,7 +37,7 @@ function Base.show(io::IO, gd::GroupedDataFrame;
             nrows = size(gd[1], 1)
             rows = nrows > 1 ? "rows" : "row"
 
-            identified_groups = [string(col, " = ", repr(gd[1][1, col]))
+            identified_groups = [string(parent_names[col], " = ", repr(gd[1][1, col]))
                                  for col in gd.cols]
 
             print(io, "\nFirst Group ($nrows $rows): ")
@@ -49,7 +50,7 @@ function Base.show(io::IO, gd::GroupedDataFrame;
             nrows = size(gd[N], 1)
             rows = nrows > 1 ? "rows" : "row"
 
-            identified_groups = [string(col, " = ", repr(gd[N][1, col]))
+            identified_groups = [string(parent_names[col], " = ", repr(gd[N][1, col]))
                                  for col in gd.cols]
             print(io, "\n⋮")
             print(io, "\nLast Group ($nrows $rows): ")

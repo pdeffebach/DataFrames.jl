@@ -1,5 +1,5 @@
 Base.summary(df::AbstractDataFrame) =
-    @sprintf("%d×%d %s", size(df)..., nameof(typeof(df)))
+    @sprintf("%d×%d %s", size(df)..., typeof(df).name)
 Base.summary(io::IO, df::AbstractDataFrame) = print(io, summary(df))
 
 """
@@ -88,7 +88,7 @@ function compacttype(T::Type, maxwidth::Int=8, initial::Bool=true)
     maxwidth -= 1 # we will add "…" at the end
 
     if T <: CategoricalValue
-        sT = string(nameof(T))
+        sT = string(T.name)
         if textwidth(sT) ≤ maxwidth
             return sT * "…" * suffix
         else
@@ -96,8 +96,11 @@ function compacttype(T::Type, maxwidth::Int=8, initial::Bool=true)
         end
     elseif T isa Union
         return "Union…" * suffix
+    elseif T isa UnionAll
+        sT = string(Base.unwrap_unionall(T).name)
     else
-        sT = string(nameof(T))
+        T::DataType
+        sT = string(T.name)
     end
 
     cumwidth = 0
@@ -608,8 +611,7 @@ end
          allgroups::Bool = !get(io, :limit, false),
          splitcols::Bool = get(io, :limit, false),
          rowlabel::Symbol = :Row,
-         summary::Bool = true,
-         eltypes::Bool = true)
+         summary::Bool = true)
 
 Render a data frame to an I/O stream. The specific visual
 representation chosen depends on the width of the display.
