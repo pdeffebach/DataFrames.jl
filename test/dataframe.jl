@@ -123,7 +123,24 @@ end
     df = DataFrame(a=Union{Int, Missing}[2, 3],
                    b=Union{DataFrame, Missing}[DataFrame(c = 1), DataFrame(d = 2)])
     dfc = copy(df)
+    dfcc = copy(df, copycols=false)
     dfdc = deepcopy(df)
+
+    @test dfc == df
+    @test dfc.a !== df.a
+    @test dfc.b !== df.b
+    @test DataFrames._columns(dfc) == DataFrames._columns(df)
+    @test DataFrames._columns(dfc) !== DataFrames._columns(df)
+    @test dfcc == df
+    @test dfcc.a === df.a
+    @test dfcc.b === df.b
+    @test DataFrames._columns(dfcc) == DataFrames._columns(df)
+    @test DataFrames._columns(dfcc) !== DataFrames._columns(df)
+    @test dfdc == df
+    @test dfdc.a !== df.a
+    @test dfdc.b !== df.b
+    @test DataFrames._columns(dfdc) == DataFrames._columns(df)
+    @test DataFrames._columns(dfdc) !== DataFrames._columns(df)
 
     df[1, :a] = 4
     df[1, :b][!, :e] .= 5
@@ -230,9 +247,9 @@ end
     @test propertynames(df) == [:a_2, :a, :a_1, :a_3]
     @test_throws ArgumentError insertcols!(df, 10, :a => [11,12], makeunique=true)
 
-    # TODO: re-enable this test after the deprecation; this should be no-op
-    # (it only should check if `2` is in range)
-    # @test_throws ArgumentError insertcols!(df, 2)
+    dfc = copy(df)
+    @test insertcols!(df, 2) == dfc
+    @test_throws ArgumentError insertcols!(df, 10)
     @test_throws ArgumentError insertcols!(df, 2, a=1, b=2)
 
     df = DataFrame()
@@ -313,6 +330,11 @@ end
     df = DataFrame(c=1:3)
     insertcols!(df, 1, :a => Ref(1), :b => fill(1))
     @test df == DataFrame(a=[1,1,1], b=[1,1,1], c=1:3)
+end
+
+@testset "unsupported insertcols!" begin
+    df = DataFrame(x = 1:2)
+    @test_throws ArgumentError insertcols!(df, 2, y=2:3)
 end
 
 @testset "DataFrame constructors" begin
@@ -537,7 +559,7 @@ end
     push!(df, (1, 2))
     @test df == DataFrame(a=[1, 1, 1], b=[2, 2, 2])
 
-    @test_logs (:warn, r"In the future `push!` will not allow passing collections of type") push!(df, "ab")
+    @test_throws ArgumentError push!(df, "ab")
 end
 
 @testset "delete!" begin
@@ -618,13 +640,13 @@ end
                                 q75 = [3.25, 2.5, nothing, nothing, nothing, nothing],
                                 max = [4.0, 3.0, "d", "c", Date(2004), 2],
                                 nunique = [nothing, nothing, 4, 3, 4, 2],
-                                nmissing = [nothing, 1, nothing, 1, nothing, nothing],
+                                nmissing = [0, 1, 0, 1, 0, 0],
                                 first = [1, 1, "a", "a", Date(2000), 1],
                                 last = [4, missing, "d", missing, Date(2004), 2],
                                 eltype = [Int, Union{Missing, Int}, String,
                                           Union{Missing, String}, Date, CategoricalValue{Int, UInt32}])
 
-    default_fields = [:mean, :min, :median, :max, :nunique, :nmissing, :eltype]
+    default_fields = [:mean, :min, :median, :max, :nmissing, :eltype]
 
     # Test that it works as a whole, without keyword arguments
     @test describe_output[:, [:variable; default_fields]] == describe(df)
@@ -1758,9 +1780,8 @@ end
     @view dfv[!, All()]
     @view dfv[!, Between(1,2)]
 
-# TODO: enable after setindex! rules update
-#    dfv[1, All()] = (a=1, b=2, c=3)
-#    dfv[1, Between(1,2)] = (a=1, b=2)
+    dfv[1, All()] = (a=1, b=2, c=3)
+    dfv[1, Between(1,2)] = (a=1, b=2)
     dfv[1:1, All()] = df
     dfv[1:1, Between(1,2)] = df[!, 1:2]
     dfv[:, All()] = df
@@ -1798,6 +1819,8 @@ end
 
     @test vcat(DataFrame(a=1, b=2, c=3), DataFrame(a=10, b=20, c=30),
                cols=:orderequal) == DataFrame(a=[1,10], b=[2,20], c=[3,30])
+    @test_throws ArgumentError vcat(DataFrame(a=1, b=2, c=3), DataFrame(a=10, b=20, c=30),
+                                    cols=:equal)
     @test_throws ArgumentError vcat(DataFrame(a=1, b=2, c=3), DataFrame(a=10, c=20, b=30),
                                     cols=:orderequal)
     @test_throws ArgumentError vcat(DataFrame(a=1, b=2, c=3), DataFrame(a=10, b=20, d=30),
@@ -1894,7 +1917,7 @@ end
     @test eltype(df.d) === Union{Int, Missing}
 
     a = [1]
-    df = DataFrame!(a=a)
+    df = DataFrame(a=a, copycols=false)
     push!(df, (a=1,), cols=:union)
     @test df.a === a
     push!(df, (a=1.0,), cols=:union)
@@ -1902,16 +1925,16 @@ end
     @test eltype(df.a) === Float64
 
     x = [1]
-    df = DataFrame!(a=x, b=x)
+    df = DataFrame(a=x, b=x, copycols=false)
     @test_throws AssertionError push!(df, (a=1, b=2, c=3), cols=:union)
-    @test df == DataFrame!(a=x, b=x)
+    @test df == DataFrame(a=x, b=x, copycols=false)
     @test df.a === df.b === x
 
     # note that this is correct although we have a problem with aliasing
     # as we eventually reallocate column :b to a correct length
     # and aliasing does not affect rows that already existed in df
     push!(df, (a=1, b=2.0, c=3), cols=:union)
-    @test df ≅ DataFrame!(a=[1,1], b=[1.0, 2.0], c=[missing, 3])
+    @test df ≅ DataFrame(a=[1,1], b=[1.0, 2.0], c=[missing, 3], copycols=false)
     @test df.a === x
     @test eltype(df.b) === Float64
 
@@ -1955,7 +1978,7 @@ end
     @test eltype(df.d) === Union{Int, Missing}
 
     a = [1]
-    df = DataFrame!(a=a)
+    df = DataFrame(a=a, copycols=false)
     push!(df, DataFrame(a=1)[1, :], cols=:union)
     @test df.a === a
     push!(df, DataFrame(a=1.0)[1, :], cols=:union)
@@ -1963,16 +1986,16 @@ end
     @test eltype(df.a) === Float64
 
     x = [1]
-    df = DataFrame!(a=x, b=x)
+    df = DataFrame(a=x, b=x, copycols=false)
     @test_throws AssertionError push!(df, DataFrame(a=1, b=2, c=3)[1, :], cols=:union)
-    @test df == DataFrame!(a=x, b=x)
+    @test df == DataFrame(a=x, b=x, copycols=false)
     @test df.a === df.b === x
 
     # note that this is correct although we have a problem with aliasing
     # as we eventually reallocate column :b to a correct length
     # and aliasing does not affect rows that already existed in df
     push!(df, DataFrame(a=1, b=2.0, c=3)[1, :], cols=:union)
-    @test df ≅ DataFrame!(a=[1,1], b=[1.0, 2.0], c=[missing, 3])
+    @test df ≅ DataFrame(a=[1,1], b=[1.0, 2.0], c=[missing, 3], copycols=false)
     @test df.a === x
     @test eltype(df.b) === Float64
 end
@@ -2000,6 +2023,12 @@ end
             @test push!(df, v, cols=cols) ≅ DataFrame(a=[1, "a"], b=[1,missing])
         end
     end
+end
+
+@testset "push! with :setequal and wrong number of entries" begin
+    df = DataFrame(a=1:3)
+    @test_throws ArgumentError push!(df, (a=10, b=20))
+    @test_throws ArgumentError push!(df, "a")
 end
 
 end # module

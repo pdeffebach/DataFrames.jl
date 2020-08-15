@@ -194,16 +194,15 @@ end
 
 function Base.show(io::IO, mime::MIME"text/html", gd::GroupedDataFrame)
     N = length(gd)
-    parent_names = _names(gd)
     keys = html_escape(join(string.(groupcols(gd)), ", "))
     keystr = length(gd.cols) > 1 ? "keys" : "key"
     groupstr = N > 1 ? "groups" : "group"
-    write(io, "<p><b>$(typeof(gd).name) with $N $groupstr based on $keystr: $keys</b></p>")
+    write(io, "<p><b>$(nameof(typeof(gd))) with $N $groupstr based on $keystr: $keys</b></p>")
     if N > 0
         nrows = size(gd[1], 1)
         rows = nrows > 1 ? "rows" : "row"
 
-        identified_groups = [html_escape(string(parent_names[col], " = ",
+        identified_groups = [html_escape(string(col, " = ",
                                                 repr(first(gd[1][!, col]))))
                              for col in gd.cols]
 
@@ -216,7 +215,7 @@ function Base.show(io::IO, mime::MIME"text/html", gd::GroupedDataFrame)
         nrows = size(gd[N], 1)
         rows = nrows > 1 ? "rows" : "row"
 
-        identified_groups = [html_escape(string(parent_names[col], " = ",
+        identified_groups = [html_escape(string(col, " = ",
                                                 repr(first(gd[N][!, col]))))
                              for col in gd.cols]
 
@@ -342,16 +341,15 @@ Base.show(io::IO, mime::MIME"text/latex", dfcs::DataFrameColumns; eltypes::Bool=
 
 function Base.show(io::IO, mime::MIME"text/latex", gd::GroupedDataFrame)
     N = length(gd)
-    parent_names = _names(gd)
     keys = join(latex_escape.(string.(groupcols(gd))), ", ")
     keystr = length(gd.cols) > 1 ? "keys" : "key"
     groupstr = N > 1 ? "groups" : "group"
-    write(io, "$(typeof(gd).name) with $N $groupstr based on $keystr: $keys\n\n")
+    write(io, "$(nameof(typeof(gd))) with $N $groupstr based on $keystr: $keys\n\n")
     if N > 0
         nrows = size(gd[1], 1)
         rows = nrows > 1 ? "rows" : "row"
 
-        identified_groups = [latex_escape(string(parent_names[col], " = ",
+        identified_groups = [latex_escape(string(col, " = ",
                                                  repr(first(gd[1][!, col]))))
                              for col in gd.cols]
 
@@ -364,7 +362,7 @@ function Base.show(io::IO, mime::MIME"text/latex", gd::GroupedDataFrame)
         nrows = size(gd[N], 1)
         rows = nrows > 1 ? "rows" : "row"
 
-        identified_groups = [latex_escape(string(parent_names[col], " = ",
+        identified_groups = [latex_escape(string(col, " = ",
                                                  repr(first(gd[N][!, col]))))
                              for col in gd.cols]
 

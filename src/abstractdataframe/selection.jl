@@ -1,5 +1,5 @@
 # TODO:
-# * add select/select!/transform/transform! for GroupedDataFrame
+# * add combine(fun, df) for DataFrame with 0 rows
 
 # normalize_selection function makes sure that whatever input format of idx is it
 # will end up in one of four canonical forms
@@ -278,7 +278,8 @@ SELECT_ARG_RULES =
     select!(df::DataFrame, args...)
 
 Mutate `df` in place to retain only columns specified by `args...` and return it.
-The result is guaranteed to have the same number of rows as `df`.
+The result is guaranteed to have the same number of rows as `df`, except when no
+columns are selected (in which case the result has zero rows).
 
 $SELECT_ARG_RULES
 
@@ -373,7 +374,8 @@ transform!(df::DataFrame, args...) = select!(df, :, args...)
     select(df::AbstractDataFrame, args...; copycols::Bool=true)
 
 Create a new data frame that contains columns from `df` specified by `args` and
-return it. The result is guaranteed to have the same number of rows as `df`.
+return it. The result is guaranteed to have the same number of rows as `df`,
+except when no columns are selected (in which case the result has zero rows)..
 
 If `df` is a `DataFrame` or `copycols=true` then column renaming and transformations
 are supported.
@@ -506,12 +508,16 @@ transform(df::AbstractDataFrame, args...; copycols::Bool=true) =
 
 """
     combine(df::AbstractDataFrame, args...)
+    combine(arg, df::AbstractDataFrame)
 
 Create a new data frame that contains columns from `df` specified by `args` and
 return it. The result can have any number of rows that is determined by the
 values returned by passed transformations.
 
-See [`select`](@ref) for detailed rules regarding accepted values for `args`.
+See [`select`](@ref) for detailed rules regarding accepted values for `args` in
+`combine(df, args...)` form. For `combine(arg, df)` the same rules as for
+`combine` on `GroupedDataFrame` apply except that a `df` with zero rows is
+currently not allowed.
 
 # Examples
 ```jldoctest
@@ -535,7 +541,14 @@ julia> combine(df, :a => sum, nrow)
 combine(df::AbstractDataFrame, args...) =
     manipulate(df, args..., copycols=true, keeprows=false)
 
-combine(arg, df::AbstractDataFrame) = combine(arg, groupby(df, []))
+function combine(arg, df::AbstractDataFrame)
+    if nrow(df) == 0
+        throw(ArgumentError("calling combine on a data frame with zero rows" *
+                            " with transformation as a first argument is " *
+                            "currently not supported"))
+    end
+    return combine(arg, groupby(df, Symbol[]))
+end
 
 manipulate(df::DataFrame, args::AbstractVector{Int}; copycols::Bool, keeprows::Bool) =
     DataFrame(_columns(df)[args], Index(_names(df)[args]),
